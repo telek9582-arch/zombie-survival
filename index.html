@@ -195,7 +195,7 @@ function addPk(type,x,z){const m=pkModel(type);m.position.set(x,.7,z);PK.add(m);
 function clearPk(){while(PK.children.length)PK.remove(PK.children[0]);pks.length=0}
 function updPk(dt){const tt=performance.now()/1000;
   for(const p of pks.slice()){p.m.rotation.y+=dt*2;p.m.position.y=.7+Math.sin(tt*3+p.x)*.12;
-    if(Math.hypot(P.x-p.x,P.z-p.z)<1.8&&P.y<1.5){PK.remove(p.m);pks.splice(pks.indexOf(p),1);snd('kit');
+    if(Math.hypot(P.x-p.x,P.z-p.z)<1.8&&P.y<1.5){PK.remove(p.m);pks.splice(pks.indexOf(p),1);snd('kit');if(p.type=='med')lvStat.m++;else if(p.type[0]=='w')lvStat.w++;
       if(p.type=='key'){P.key=true;showB('КЛЮЧ-КАРТА ПОЛУЧЕНА! Идите к двери',3000,'#33ff77')}
       else if(p.type=='gren'){P.gren=Math.min(6,P.gren+1);showB('+1 граната',1400,'#66ff66')}
       else if(p.type=='shd'){P.hsHave=true;P.hsD=1;showB('ЩИТ! '+kname(KB.shield)+' — взять в левую руку',2200,'#66ddff')}
@@ -409,12 +409,13 @@ function damageZ(z,d,pt,n=1,ign=false,by){
 function killZ(z){
   if(z.dead)return;z.dead=1;const p=z.g.position;
   if(net.host&&net.on&&z.by!=null)SC[z.by]=(SC[z.by]||0)+1;
+  if(!net.on)lvKills++;
   burst(p.clone().setY(z.boss?2.5:1),z.boss?0xaa66ff:z.type=='fire'?0xff7700:z.type=='ice'?0xaaddff:0x66aa44,z.boss?60:25,z.boss?12:7,1);
   scene.remove(z.g);zs.splice(zs.indexOf(z),1);
   if(z.type=='fire'){burst(p.clone().setY(1),0xff5500,30,9,.7,-1,2);snd('boom');aoeHurt(p,3.5,z)}
   if(z.type=='fat'){burst(p.clone().setY(1),0x88ff44,35,7,1.2,-.5,2.5);snd('boom');aoeHurt(p,3.5,z);if(!P.dead&&Math.hypot(P.x-p.x,P.z-p.z)<3.5&&!P.hsOn)P.slow=2.5}
   if(z.boss){snd('bdie');
-    if(z.final){for(const q of zs){q.dead=1;scene.remove(q.g)}zs.length=0;if(net.host&&net.on)startCeremony(true);else end(true);return}
+    if(z.final){for(const q of zs){q.dead=1;scene.remove(q.g)}zs.length=0;if(net.host&&net.on)startCeremony(true);else startStatsOnly(true);return}
     if(lvN>=15){startFinal();return}
     showB(zs.length?'КЛЮЧ-КАРТА ВЫПАЛА! Прислужники продолжают бой':'КЛЮЧ-КАРТА ВЫПАЛА!',3500,'#33ff77');dropPk('key',p.x,p.z);
     phase='exit';return}
@@ -436,13 +437,17 @@ function playerDown(by){if(DUEL){duelDie(by);return}if(!P.revived)revive();else 
 const cache={};const set=(id,s)=>{if(cache[id]!==s){cache[id]=s;$(id).textContent=s}};
 let bt;function showB(t,ms=2200,c='#ffd23f'){chatAdd('Система',t,c);const b=$('banner');b.textContent=t;b.style.color=c;b.style.opacity=1;clearTimeout(bt);bt=setTimeout(()=>b.style.opacity=0,ms)}
 function ov(html){const o=$('ov');o.innerHTML=html;o.style.display=html?'flex':'none'}
-function greet(){ov('<h1 style="font-size:44px;color:#ffd23f">ZOMBIE SURVIVAL</h1><div style="font-size:26px;margin-top:20px">Создатель: <b>Яндаров Абдул-Рахман</b></div><div style="font-size:22px;margin-top:10px;color:#9fd8ff">Обновил игру: <b>октябрь 2026</b></div><div style="font-size:30px;font-weight:bold;color:#ff8a3d;margin:24px 20px 0;max-width:900px">СПАСИБО, ЧТО ВОШЛИ В МОЮ ИГРУ!<br>Я ОЧЕНЬ РАД!<br>ЖЕЛАЮ ВАМ УДАЧИ И СЧАСТЛИВОЙ ИГРЫ!</div><button onclick="loginScreen()">ДАЛЕЕ</button>');clearTimeout(window.__gt);window.__gt=setTimeout(()=>{if(state=='menu'&&$('ov').textContent.includes('Обновил игру'))loginScreen()},5000)}
+function greet(){ov('<div style="position:fixed;right:14px;top:64px;text-align:right;font-size:clamp(13px,2.3vmin,20px);line-height:1.55;text-shadow:0 0 5px #000;background:rgba(0,0,0,.45);padding:8px 14px;border-radius:8px"><div>Создатель: <b>Яндаров Абдул-Рахман</b></div><div style="color:#9fd8ff">Обновил игру: <b>октябрь 2026</b></div></div>'
+  +'<h1 style="font-size:clamp(28px,6vmin,44px);color:#ffd23f">ZOMBIE SURVIVAL</h1>'
+  +'<div style="max-width:880px;margin:14px 20px 0;padding:12px 20px;border:2px solid #9fd8ff;border-radius:10px;background:rgba(20,40,70,.6);font-size:clamp(16px,3vmin,28px);line-height:1.5"><b>Уважаемые игроки!</b><br>Игра обновлена <b>27.10.2026</b>.<br>Добавлены комнаты — теперь можно играть онлайн с друзьями.</div>'
+  +'<div style="font-size:clamp(18px,3.6vmin,30px);font-weight:bold;color:#ff8a3d;margin:20px 20px 0;max-width:900px">СПАСИБО, ЧТО ВОШЛИ В МОЮ ИГРУ!<br>Я ОЧЕНЬ РАД!<br>ЖЕЛАЮ ВАМ УДАЧИ И СЧАСТЛИВОЙ ИГРЫ!</div><button onclick="loginScreen()">ДАЛЕЕ</button>');
+  clearTimeout(window.__gt);window.__gt=setTimeout(()=>{if(state=='menu'&&$('ov').textContent.includes('Игра обновлена'))loginScreen()},40000)}
 function menu(){
   const sv=LS.get(ukey(),{}).save;
   ov('<h1>ZOMBIE SURVIVAL</h1><div style="font-size:18px">👤 '+esc(USER)+'</div>'
    +'<div style="display:flex;flex-wrap:wrap;gap:10px;justify-content:center;max-width:680px">'
    +(sv?'<button onclick="continueGame()" style="background:#2a8a3a">▶ ПРОДОЛЖИТЬ (ур. '+sv.lv+')</button>':'')
-   +'<button onclick="start()">'+(sv?'НОВАЯ ИГРА':'НАЧАТЬ ИГРУ')+'</button><button onclick="startTraining()" style="background:#2a6a9a">🎯 ТРЕНИРОВКА</button><button onclick="coopScreen()" style="background:#7a3a9a">👥 ПО СЕТИ (WI-FI)</button><button onclick="duelScreen()" style="background:#a03030">⚔ ДУЭЛЬ 1×1</button><button onclick="openSet()" style="background:#555">⚙ НАСТРОЙКИ</button><button onclick="loginScreen()" style="background:#444">👤 СМЕНИТЬ ИГРОКА</button></div>'
+   +'<button onclick="start()">'+(sv?'НОВАЯ ИГРА':'НАЧАТЬ ИГРУ')+'</button><button onclick="startTraining()" style="background:#2a6a9a">🎯 ТРЕНИРОВКА</button><button onclick="openCoop()" style="background:#7a3a9a">👥 ПО СЕТИ (WI-FI)</button><button onclick="openDuel()" style="background:#a03030">⚔ ДУЭЛЬ 1×1</button><button onclick="openSet()" style="background:#555">⚙ НАСТРОЙКИ</button><button onclick="loginScreen()" style="background:#444">👤 СМЕНИТЬ ИГРОКА</button></div>'
    +'<div style="margin-top:16px;font-size:15px;opacity:.8">В игре нажмите <b>TAB</b> — справка и управление</div>')}
 function end(w){
   if(!w&&net.host&&net.on&&!P.dead){P.dead=true;P.hp=0;hold=false;if(aliveRemote()>0){showB('ВЫ ПОГИБЛИ! Друзья продолжают бой',4000,'#ff6666');snd('lose');return}}
@@ -461,7 +466,7 @@ function placePickups(n){
     for(let tr=0;tr<100;tr++){const x=(rq()*2-1)*(HALF-6),z=(rq()*2-1)*(HALF-6);if(free(x,z,.5,.5)){addPk(ty,x,z);break}}}}
 function startLevel(n){
   clearPrj();DUEL=false;
-  P.dead=false;RPS.forEach(r=>r.dead=false);SC={};clearHaz();P.freeze=0;
+  P.dead=false;RPS.forEach(r=>r.dead=false);SC={};lvKills=0;lvStat.w=lvStat.m=0;clearHaz();P.freeze=0;
   FB=null;lvN=n;buildLevel(n);zs.forEach(z=>scene.remove(z.g));zs.length=0;nades.forEach(q=>scene.remove(q.m));nades.length=0;clearPk();
   placePickups(n);
   P.x=SP.x;P.z=SP.z;P.yaw=Math.atan2(SP.x,SP.z);P.pitch=0;P.hp=10;P.kits=Math.max(P.kits,2);P.gren=Math.max(P.gren,2);P.resP=Math.max(P.resP,70);P.resR=Math.max(P.resR,60);P.key=false;P.rel=0;P.slow=0;P.afT=0;P.auto=0;P.stam=30;P.tired=0;
@@ -469,7 +474,7 @@ function startLevel(n){
   showB('УРОВЕНЬ '+n+' / 15 • '+loc(n)[0]+' • '+MODE[tier(n)]+' РЕЖИМ',3500,'#ffd23f');
   if(net.host&&net.on)netSend({t:'lvl',n});
   if(!loadingSave&&!trainMode&&!net.on&&state=='play')saveUser(JSON.parse(JSON.stringify(snapSave())))}
-function nextLevel(){if(CER.on)return;if(net.host&&net.on&&!DUEL){startCeremony(lvN>=15);return}if(lvN>=15)end(true);else{startLevel(lvN+1);givePrize()}}
+function nextLevel(){if(CER.on)return;if(net.host&&net.on&&!DUEL){startCeremony(lvN>=15);return}startStatsOnly(lvN>=15)}
 function start(sv){au();FB=null;trainMode=false;$('tbar').style.display='none';tg.forEach(q=>scene.remove(q.g));tg.length=0;TL.children.length=0;
   Object.assign(P,{hsHave:false,hsOn:false,hsD:1,stam:30,tired:0,afT:0,auto:0,revived:false,hammer:false,slam:0,own:{1:1,2:1,3:1,4:1},mag:{},res:{},spin:0,slow:0,kits:3,gren:3,y:0,vy:0,eye:1.7,ammo:35,ammoR:30,resP:70,resR:60,relW:2,rel:0,cd:0,hurtCd:0,swing:0,rec:0,flash:0});
   kills=0;P.dead=false;setW(2);state='play';ov('');
@@ -598,7 +603,9 @@ function updRPs(dt){const k=Math.min(1,dt*10);
     setRpGun(rp,rp.tw);const sp=dt>0?Math.hypot(rp.x-ox,rp.z-oz)/dt:0;rp.spd+=(sp-rp.spd)*Math.min(1,dt*8);rp.ph+=rp.spd*dt*1.5;const amp=Math.min(1,rp.spd/3)*.8;
     rp.lL.rotation.x=Math.sin(rp.ph)*amp;rp.lR.rotation.x=-Math.sin(rp.ph)*amp;rp.gun.rotation.x=rp.tp;rp.armR.rotation.x=-1.3+rp.tp;rp.armL.rotation.x=-1.25+rp.tp;rp.hd.rotation.x=-rp.tp*.5}}
 function rpClear(){for(const rp of RPS.values())scene.remove(rp.g);RPS.clear()}
-const CER={on:false,t:0,T:7,w:[],fin:0,n:0,cf:0};let SC={},selfAv=null;
+const CER={on:false,t:0,T:7,w:[],fin:0,n:0,cf:0,stats:false,left:-1};let SC={},selfAv=null,lvKills=0;const lvStat={w:0,m:0};
+const stEl=document.createElement('div');stEl.style.cssText='position:fixed;left:3%;top:20%;width:min(340px,46vw);background:rgba(0,0,0,.72);border:2px solid #ffd23f;border-radius:10px;padding:12px 16px;z-index:6;display:none;font-size:clamp(14px,2.8vmin,22px);line-height:1.7;text-shadow:0 0 4px #000;box-sizing:border-box';document.body.appendChild(stEl);
+function skipStats(){if(CER.on&&CER.stats&&(net.host||!net.on))CER.T=CER.t}
 const cerEl=document.createElement('div');cerEl.style.cssText='position:fixed;left:0;right:0;top:7%;text-align:center;pointer-events:none;z-index:6;text-shadow:0 0 6px #000,0 0 10px #000;display:none;padding:0 10px;box-sizing:border-box';document.body.appendChild(cerEl);
 const nameOf=id=>id===net.id?(net.name||USER):((RPS.get(id)||{}).name||'?');
 function scoreText(){const l=(net.host?Object.entries(SC).map(e=>[+e[0],e[1]]):(net.sc||[])).slice().sort((a,b)=>b[1]-a[1]);
@@ -607,22 +614,28 @@ function scoreText(){const l=(net.host?Object.entries(SC).map(e=>[+e[0],e[1]]):(
 function startCeremony(fin){
   const sc=net.players.map(p=>[p.id,p.name,SC[p.id]||0]).sort((a,b)=>b[2]-a[2]);
   const mx=sc.length?sc[0][2]:0;
-  if(mx<=0){if(fin)end(true);else{startLevel(lvN+1);givePrize()}return}
-  const m={t:'cer',n:lvN,fin:fin?1:0,T:7,w:sc.filter(r=>r[2]==mx).map(r=>r[0]),sc};
+  const m={t:'cer',n:lvN,fin:fin?1:0,T:30,st:1,w:mx>0?sc.filter(r=>r[2]==mx).map(r=>r[0]):[],sc};
   phase='cer';netSend(m);startCer(m)}
-function startCer(m){CER.on=true;CER.t=0;CER.cf=0;CER.T=m.T||7;CER.w=m.w||[];CER.fin=m.fin;CER.n=m.n;CER.duel=!!m.duel;hold=false;
-  for(const z of zs)scene.remove(z.g);zs.length=0;for(const q of nades)scene.remove(q.m);nades.length=0;clearHaz();
+function startStatsOnly(fin){const m={t:'cer',n:lvN,fin:fin?1:0,T:30,st:1,solo:1,w:[],sc:[[net.id,USER,lvKills]]};phase='cer';startCer(m)}
+function startCer(m){CER.on=true;CER.t=0;CER.cf=0;CER.T=m.T||7;CER.w=m.w||[];CER.fin=m.fin;CER.n=m.n;CER.duel=!!m.duel;CER.stats=!!m.st;CER.left=-1;hold=false;
+  for(const z of zs)scene.remove(z.g);zs.length=0;for(const q of nades)scene.remove(q.m);nades.length=0;clearHaz();clearPrj();
   const win=m.sc.filter(r=>CER.w.includes(r[0])).map(r=>esc(r[1])).join(', ');
-  cerEl.innerHTML='<div style="font-size:clamp(18px,4.6vmin,42px);color:#ffd23f;font-weight:bold">🏆 '+(m.duel?'ПОБЕДИТЕЛЬ ДУЭЛИ':m.fin?'ПОБЕДИТЕЛЬ ИГРЫ':'ПОБЕДИТЕЛЬ УРОВНЯ '+m.n)+': '+win+'</div><div style="font-size:clamp(13px,2.6vmin,22px);margin-top:6px;line-height:1.5">'+m.sc.map(r=>(CER.w.includes(r[0])?'👑 ':'')+esc(r[1])+' — '+r[2]).join('<br>')+'</div>';
-  cerEl.style.display='block';snd('win')}
+  const head=CER.w.length?'🏆 '+(m.duel?'ПОБЕДИТЕЛЬ ДУЭЛИ':m.fin?'ПОБЕДИТЕЛЬ ИГРЫ':'ПОБЕДИТЕЛЬ УРОВНЯ '+m.n)+': '+win:(m.fin?'🏁 ИГРА ПРОЙДЕНА!':'🏁 УРОВЕНЬ '+m.n+' ПРОЙДЕН!');
+  cerEl.innerHTML='<div style="font-size:clamp(18px,4.6vmin,42px);color:#ffd23f;font-weight:bold">'+head+'</div>'+(m.solo?'':'<div style="font-size:clamp(13px,2.6vmin,22px);margin-top:6px;line-height:1.5">'+m.sc.map(r=>(CER.w.includes(r[0])?'👑 ':'')+esc(r[1])+' — '+r[2]).join('<br>')+'</div>');
+  cerEl.style.display='block';
+  if(CER.stats){const me=m.sc.find(r=>r[0]===net.id)||[0,'',0];
+    stEl.innerHTML='<div style="font-size:1.15em;color:#ffd23f;font-weight:bold">📊 Уровень '+m.n+' пройден!</div>☠ Убито зомби: <b>'+me[2]+'</b><br>🔫 Взято оружия: <b>'+lvStat.w+'</b><br>✚ Взято аптечек: <b>'+lvStat.m+'</b><div style="margin-top:6px;opacity:.85">'+(m.fin?'Итоги игры':'Следующий уровень')+' через <b id="stc">'+CER.T+'</b> с</div>'+((net.host||!net.on)?'<button onclick="skipStats()" style="font-size:14px;padding:6px 12px;margin-top:8px">ПРОДОЛЖИТЬ</button>':'');
+    stEl.style.display='block'}
+  snd('win')}
 function cerCam(){const w=CER.w[0],q=w===net.id?P:RPS.get(w);if(!q)return;const a=CER.t*.5,y0=q.y||0,cx=q.x+Math.sin(a)*5,cz=q.z+Math.cos(a)*5,cy=y0+2.4,dx=q.x-cx,dz=q.z-cz,dy=y0+1.5-cy,d=Math.hypot(dx,dy,dz)||1;cam.position.set(cx,cy,cz);cam.rotation.set(Math.asin(dy/d),Math.atan2(-dx,-dz),0)}
 function cerStep(dt){CER.t+=dt;CER.cf-=dt;
   const q=CER.w[0]===net.id?P:RPS.get(CER.w[0]);
   if(q&&CER.cf<=0){CER.cf=.07;burst(new THREE.Vector3(q.x+(Math.random()-.5)*3,3,q.z+(Math.random()-.5)*3),[0xffd23f,0xff4444,0x44ddff,0x66ff66][Math.random()*4|0],3,5,1.3,5,1.2)}
   if(CER.w.includes(net.id)){if(!selfAv)selfAv=rpMake(-1,net.name||USER);selfAv.g.visible=true;selfAv.x=P.x;selfAv.z=P.z;selfAv.y=P.y;selfAv.g.position.x=P.x;selfAv.g.position.z=P.z;dance(selfAv,CER.t)}
-  if(net.host){if(CER.t>=CER.T)cerDone()}else if(CER.t>=CER.T+6)cerEnd()}
+  if(CER.stats){const l=Math.max(0,Math.ceil(CER.T-CER.t));if(l!==CER.left){CER.left=l;const e=$('stc');if(e)e.textContent=l}}
+  if(net.host||!net.on){if(CER.t>=CER.T)cerDone()}else if(CER.t>=CER.T+6)cerEnd()}
 function cerDone(){const f=CER.fin,du=CER.duel;cerEnd();if(du)duelEnd();else if(f)end(true);else{startLevel(lvN+1);givePrize()}}
-function cerEnd(){if(!CER.on)return;CER.on=false;cerEl.style.display='none';if(selfAv){undance(selfAv);selfAv.g.visible=false}}
+function cerEnd(){if(!CER.on)return;CER.on=false;cerEl.style.display='none';stEl.style.display='none';if(selfAv){undance(selfAv);selfAv.g.visible=false}}
 /* ---------- дуэль 1×1 ---------- */
 let DUEL=false;const DUEL_WIN=5;
 function buildArena(){
@@ -709,7 +722,7 @@ function netTick(dt){
 function resetPlayer(){Object.assign(P,{dead:false,hsHave:false,hsOn:false,hsD:1,stam:30,tired:0,afT:0,auto:0,revived:false,hammer:false,slam:0,own:{1:1,2:1,3:1,4:1},mag:{},res:{},spin:0,slow:0,kits:3,gren:3,y:0,vy:0,eye:1.7,ammo:35,ammoR:30,resP:70,resR:60,relW:2,rel:0,cd:0,hurtCd:0,swing:0,rec:0,flash:0});kills=0;setW(2)}
 function startCoopGuest(){au();cerEnd();DUEL=false;clearPrj();trainMode=false;FB=null;lvN=0;resetPlayer();state='play';ov('');net.inGame=true;RPS.forEach(r=>{r.seen=0;r.dead=false});hold=false;rot=false;paused=false;startT=performance.now();net.exitSent=0;
   if(TOUCH){try{document.documentElement.requestFullscreen()}catch(e){}try{screen.orientation.lock('landscape').catch(()=>{})}catch(e){}}}
-function guestLevel(n){cerEnd();net.sc=[];clearHaz();P.freeze=0;
+function guestLevel(n){cerEnd();net.sc=[];lvKills=0;lvStat.w=lvStat.m=0;clearHaz();P.freeze=0;
   const prize=lvN>=1&&n>lvN;lvN=n;net.exitSent=0;buildLevel(n);zs.forEach(z=>scene.remove(z.g));zs.length=0;nades.forEach(q=>scene.remove(q.m));nades.length=0;clearPk();placePickups(n);
   P.x=SP.x+2;P.z=SP.z+((net.id%6)-2.5)*1.6;P.yaw=Math.atan2(SP.x,SP.z);P.pitch=0;P.hp=10;P.kits=Math.max(P.kits,2);P.gren=Math.max(P.gren,2);P.resP=Math.max(P.resP,70);P.resR=Math.max(P.resR,60);P.key=false;P.rel=0;P.slow=0;P.afT=0;P.auto=0;P.stam=30;P.tired=0;
   $('boss').style.display='none';phase='wave';wi=1;showB('УРОВЕНЬ '+n+' / 15 • '+loc(n)[0]+' • '+MODE[tier(n)]+' РЕЖИМ',3500,'#ffd23f');if(prize)givePrize()}
@@ -749,7 +762,7 @@ function onRoster(m){
 function onSrv(m){
   switch(m.s){
     case'welcome':net.id=m.id;net.name=m.name;net.on=true;lobbyScreen();break;
-    case'err':{const msg={nohost:'Игра ещё не создана. Хост должен нажать «СОЗДАТЬ ИГРУ» — потом нажмите «ПРИСОЕДИНИТЬСЯ» снова.',hostexists:'Игра уже создана другим игроком. Нажмите «ПРИСОЕДИНИТЬСЯ».',full:'В игре уже максимум игроков (8).'}[m.code]||'Ошибка подключения';netClose();backScreen(msg);break}
+    case'err':{const msg={nohost:'Игра ещё не создана. Хост должен нажать «СОЗДАТЬ ИГРУ» — потом нажмите «ПРИСОЕДИНИТЬСЯ» снова.',hostexists:'Игра уже создана другим игроком. Нажмите «ПРИСОЕДИНИТЬСЯ».',full:'В этой комнате уже 8 игроков. Выберите другую комнату.',badroom:'Такой комнаты нет. Выберите комнату из списка.'}[m.code]||'Ошибка подключения';netClose();backScreen(msg);break}
     case'players':onRoster(m);break;
     case'hostgone':netClose();resetWorld();backScreen('Хост закрыл игру.');break;
     case'm':onNet(m.m,m.f);break}}
@@ -760,14 +773,14 @@ function netConnect(role){
   let ws;try{ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws')}catch(e){return backScreen('Не удалось подключиться к серверу.')}
   net.ws=ws;net.host=role=='host';net.guest=!net.host;net.lm=window.LMODE||'coop';
   ov('<h1 style="font-size:clamp(24px,5vmin,44px)">Подключаюсь…</h1>');
-  ws.onopen=()=>ws.send(JSON.stringify({s:role=='host'?'host':'join',name:USER}));
+  ws.onopen=()=>ws.send(JSON.stringify({s:role=='host'?'host':'join',name:USER,room:window.ROOM,mode:window.LMODE}));
   ws.onmessage=e=>{let m;try{m=JSON.parse(e.data)}catch(x){return}onSrv(m)};
   ws.onclose=()=>netLost()}
 function showAddr(){fetch('/info').then(r=>r.json()).then(i=>{const e=$('addr');if(!e)return;const l=i.ips.map(ip=>'http://'+ip+':'+i.port);e.innerHTML=l.length?l.map(esc).join('<br>'):esc(location.origin)}).catch(()=>{})}
 function coopUI(){const e=$('plist');if(!e)return;
   e.innerHTML='👤 <b>'+esc(net.name||USER)+'</b> (вы'+(net.host?', хост':'')+')'+net.players.filter(p=>p.id!==net.id).map(p=>'<br>👤 '+esc(p.name)+(p.id===net.hostId?' (хост)':'')).join('')+'<div style="font-size:14px;opacity:.7;margin-top:6px">Игроков: '+net.players.length+' / 8</div>'}
 function lobbyScreen(msg){const h=net.host,du=(h?window.LMODE:net.lm)=='duel';
-  ov('<h1 style="font-size:clamp(24px,5vmin,44px)">'+(du?'⚔ Дуэль 1×1':'👥 Игра по сети')+'</h1>'
+  ov('<h1 style="font-size:clamp(24px,5vmin,44px)">'+(du?'⚔ Дуэль 1×1':'👥 Игра по сети')+'</h1><div style="font-size:clamp(15px,2.6vmin,22px);color:#ffd23f">📍 '+esc(window.ROOMNAME||'')+'</div>'
    +(h?'<div style="max-width:640px;font-size:15px;opacity:.9">Вы — хост: игра считается на этом устройстве. Пусть '+(du?'соперник откроет':'остальные откроют')+' в браузере телефона адрес:</div><div id="addr" style="font-size:clamp(18px,3.6vmin,30px);color:#ffd23f;font-weight:bold;margin:6px"></div>'
      :'<div style="max-width:640px;font-size:16px">'+(du?'Вы подключены к дуэли. Ждите, пока хост начнёт…':'Вы подключены. Ждите, пока хост начнёт игру…')+'</div>')
    +'<div id="plist" style="margin:10px;font-size:18px;line-height:1.6"></div>'
@@ -776,20 +789,51 @@ function lobbyScreen(msg){const h=net.host,du=(h?window.LMODE:net.lm)=='duel';
    +'<div id="gyhint" style="font-size:14px;color:#9fd8ff;max-width:600px"></div><button onclick="coopMenu()" style="background:#444">← Выйти</button>'+(msg?'<div style="color:#ff9966;max-width:600px">'+esc(msg)+'</div>':''));
   coopUI();if(h)showAddr();if(TOUCH&&window.isSecureContext===false)fetch('/info').then(r=>r.json()).then(i=>{const e=$('gyhint');if(e)e.innerHTML='🎮 Чтобы работал гироскоп, откройте игру по адресу <b>https://'+esc(location.hostname)+':'+i.httpsPort+'</b> (браузер предупредит о сертификате: «Дополнительно» → «Продолжить»).'}).catch(()=>{})}
 function startCoopHost(){if(!net.host||!net.on)return;DUEL=false;net.pvp=!!(window.PVPPREF);RPS.forEach(r=>{r.seen=0;r.dead=false});net.inGame=true;netSend({t:'start',pvp:net.pvp?1:0});start()}
-function coopMenu(){netClose();menu()}
-function coopScreen(msg){
+function coopMenu(){netClose();roomsScreen(window.LMODE||'coop')}
+const ONLINE_URL='';   // сборка «со ссылкой»: сюда подставляется адрес онлайн-сервера; пусто — обычная сетевая игра
+function netRedirectTarget(host,search){if(!ONLINE_URL)return '';let h='';try{h=new URL(ONLINE_URL).hostname}catch(e){return ''}if(host===h||/[?&]lan(=|&|$)/.test(search||''))return '';return ONLINE_URL}
+function openCoop(){openNet('coop')}
+function openDuel(){openNet('duel')}
+function openNet(mode){const u=netRedirectTarget(location.hostname,location.search);if(u){location.href=u;return}window.LMODE=mode||'coop';window.ROOM=null;window.ROOMNAME='';roomsScreen(window.LMODE)}
+let roomsTimer=0;
+function stopRooms(){clearInterval(roomsTimer);roomsTimer=0}
+function roomsScreen(mode,msg){
+  stopRooms();if(mode)window.LMODE=mode;const du=window.LMODE=='duel';
   if(location.protocol==='file:')return ov('<h1 style="font-size:clamp(24px,5vmin,44px)">👥 Игра по сети</h1><div style="max-width:640px;font-size:16px">Игра открыта как обычный файл, поэтому сетевой режим недоступен.<br><br>На компьютере запустите <b>server.js</b> (двойной клик по <b>start.bat</b> или команда <b>node server.js</b>), затем откройте в браузере адрес, который покажет сервер, например <b>http://192.168.1.5:3000</b>.</div><button onclick="menu()" style="background:#444">← Назад</button>');
-  ov('<h1 style="font-size:clamp(24px,5vmin,44px)">👥 Игра по сети (Wi-Fi)</h1><div style="max-width:640px;font-size:15px;opacity:.9">Сервер запущен на компьютере. Один игрок (обычно с компьютера) нажимает «СОЗДАТЬ ИГРУ», остальные — «ПРИСОЕДИНИТЬСЯ». Зомби и боссы общие, чат работает. До 8 игроков.</div>'
-   +'<div style="display:flex;flex-wrap:wrap;gap:14px;justify-content:center"><button onclick="coopHost()">СОЗДАТЬ ИГРУ</button><button onclick="coopJoin()" style="background:#2a6a9a">ПРИСОЕДИНИТЬСЯ</button></div><button onclick="menu()" style="background:#444">← Назад</button>'+(msg?'<div style="color:#ff9966;max-width:600px">'+esc(msg)+'</div>':''))}
+  ov('<h1 style="font-size:clamp(22px,4.6vmin,40px)">'+(du?'⚔ ДУЭЛЬ 1×1':'👥 Игра по сети')+' — выберите комнату</h1>'
+    +'<div style="max-width:720px;font-size:14px;opacity:.85">Выберите свой город и комнату. В комнате до 8 игроков. Один игрок нажимает «СОЗДАТЬ» и становится хостом, остальные — «ПРИСОЕДИНИТЬСЯ».</div>'
+    +'<div id="rl" style="width:min(780px,94vw);max-height:54vh;overflow:auto;text-align:left;border:1px solid #555;border-radius:8px;padding:8px 12px;background:rgba(0,0,0,.35);font-size:15px">Загрузка списка комнат…</div>'
+    +'<div id="rsum" style="font-size:13px;opacity:.75"></div>'
+    +'<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap"><button onclick="roomsScreen()" style="background:#2a6a9a">🔄 Обновить</button><button onclick="menu()" style="background:#444">← Назад</button></div>'
+    +(msg?'<div style="color:#ff9966;max-width:600px">'+esc(msg)+'</div>':''));
+  const load=()=>fetch('/rooms',{cache:'no-store'}).then(r=>r.json()).then(d=>{if(!$('rl')){stopRooms();return}drawRooms(d)}).catch(()=>{if($('rl'))$('rl').innerHTML='Нет связи с сервером. Проверьте, что сервер запущен.'});
+  load();roomsTimer=setInterval(()=>{if(!$('rl')){stopRooms();return}load()},4000)}
+function drawRooms(d){
+  const du=window.LMODE=='duel',max=d.max||8;let h='';
+  for(const c of d.cities){const k=c.rooms.length;
+    h+='<div style="margin:6px 0"><b>'+esc(c.name)+'</b> <span style="opacity:.6;font-size:13px">('+k+' '+(k==1?'комната':k<5?'комнаты':'комнат')+', до '+k*max+' игроков)</span><br>';
+    for(const r of c.rooms){let st,col,ok=true;const dr=r.mode=='duel';
+      if(!r.host){st='свободна';col='#2e7d32'}
+      else if(du!==dr){st=dr?'дуэль':'кооп';col='#555';ok=false}
+      else if(r.players>=(du?2:max)){st='мест нет';col='#555';ok=false}
+      else if(r.busy){st=du?'идёт дуэль':'идёт игра '+r.players+'/'+max;col='#c76a00';ok=!du}
+      else{st='ждут '+r.players+'/'+(du?2:max);col='#1565c0'}
+      h+='<button '+(ok?'onclick="pickRoom(\''+r.id+'\',\''+esc(c.name)+' — комната '+r.n+'\')"':'disabled')+' style="margin:3px 6px 3px 0;padding:6px 12px;font-size:14px;background:'+col+(ok?'':';opacity:.5;cursor:default')+'">№'+r.n+' · '+st+'</button>'}
+    h+='</div>'}
+  const e=$('rl');if(e)e.innerHTML=h;const t=$('rsum');if(t)t.textContent='Всего: '+d.rooms+' комнат, до '+d.capacity+' игроков · сейчас онлайн: '+d.online}
+function pickRoom(id,label){window.ROOM=id;window.ROOMNAME=label;stopRooms();roomScreen()}
+function roomScreen(msg){stopRooms();const du=window.LMODE=='duel';
+  ov('<h1 style="font-size:clamp(24px,5vmin,44px)">'+(du?'⚔ ДУЭЛЬ 1×1':'👥 Игра по сети (Wi-Fi)')+'</h1><div style="font-size:clamp(16px,3vmin,26px);color:#ffd23f">📍 '+esc(window.ROOMNAME||'')+'</div>'
+   +'<div style="max-width:660px;font-size:15px;opacity:.92;line-height:1.5">'+(du?'Отдельная арена: два солдата, без зомби. Первый, кто убьёт соперника '+DUEL_WIN+' раз, побеждает и танцует. После смерти возрождение через 3 секунды. Доступно всё оружие.':'Один игрок нажимает «СОЗДАТЬ ИГРУ» (он хост), остальные — «ПРИСОЕДИНИТЬСЯ». Зомби и боссы общие, чат работает. До 8 игроков.')+'</div>'
+   +'<div style="display:flex;flex-wrap:wrap;gap:14px;justify-content:center">'+(du?'<button onclick="duelHost()" style="background:#a03030">СОЗДАТЬ ДУЭЛЬ</button><button onclick="duelJoin()" style="background:#2a6a9a">ПРИСОЕДИНИТЬСЯ К ДУЭЛИ</button>':'<button onclick="coopHost()">СОЗДАТЬ ИГРУ</button><button onclick="coopJoin()" style="background:#2a6a9a">ПРИСОЕДИНИТЬСЯ</button>')+'</div>'
+   +'<button onclick="roomsScreen()" style="background:#444">← К списку комнат</button>'+(msg?'<div style="color:#ff9966;max-width:600px">'+esc(msg)+'</div>':''))}
+function coopScreen(msg){roomsScreen('coop',msg)}
+function duelScreen(msg){roomsScreen('duel',msg)}
+function backScreen(msg){if(window.ROOM)roomScreen(msg);else roomsScreen(window.LMODE,msg)}
 function coopHost(){au();window.LMODE='coop';netConnect('host')}
 function coopJoin(){au();window.LMODE='coop';if(TOUCH){try{document.documentElement.requestFullscreen()}catch(e){}}netConnect('guest')}
 function duelHost(){au();window.LMODE='duel';netConnect('host')}
 function duelJoin(){au();window.LMODE='duel';if(TOUCH){try{document.documentElement.requestFullscreen()}catch(e){}}netConnect('guest')}
-function backScreen(msg){if(window.LMODE=='duel')duelScreen(msg);else coopScreen(msg)}
-function duelScreen(msg){
-  if(location.protocol==='file:')return coopScreen();
-  ov('<h1 style="font-size:clamp(24px,5vmin,44px)">⚔ ДУЭЛЬ 1×1</h1><div style="max-width:660px;font-size:15px;opacity:.92;line-height:1.5">Отдельная арена: два солдата, без зомби. Первый, кто убьёт соперника '+DUEL_WIN+' раз, побеждает и танцует. После смерти возрождение через 3 секунды (2 секунды неуязвимости). Доступно всё оружие. Нужен запущенный сервер (server.js на компьютере или телефоне).</div>'
-   +'<div style="display:flex;flex-wrap:wrap;gap:14px;justify-content:center"><button onclick="duelHost()" style="background:#a03030">СОЗДАТЬ ДУЭЛЬ</button><button onclick="duelJoin()" style="background:#2a6a9a">ПРИСОЕДИНИТЬСЯ К ДУЭЛИ</button></div><button onclick="menu()" style="background:#444">← Назад</button>'+(msg?'<div style="color:#ff9966;max-width:600px">'+esc(msg)+'</div>':''))}
 /* ---------- тренировка ---------- */
 let trainMode=false;const tg=[],TL=new THREE.Group(),tstat={score:0,hits:0,shots:0,hitShots:0,hitThis:false,last:'Стреляйте по манекенам',flash:0};scene.add(TL);
 function updParts(dt){for(const q of parts){if(q.l<=0)continue;q.l-=dt;q.m.position.addScaledVector(q.v,dt);q.v.y-=q.g*dt;if(q.m.position.y<0.02&&q.g>0){q.m.position.y=.02;q.v.set(0,0,0)}q.m.material.opacity=Math.max(0,q.l/q.ml);if(q.l<=0)q.m.visible=false}}
@@ -1130,7 +1174,7 @@ function update(dt){
 function hudUpdate(left){
   set('sc',net.on&&net.inGame?scoreText():'');set('hearts','❤️'.repeat(Math.max(0,Math.ceil(P.hp)))+'🖤'.repeat(Math.max(0,10-Math.ceil(P.hp))));set('kits','Аптечки: '+P.kits+' ('+kname(KB.kit)+') • Щит: '+(P.hsHave?Math.round(P.hsD*100)+'%'+(P.hsOn?' [в руке]':''):'нет'));
   set('lvl',DUEL?'⚔ Арена • дуэль до '+DUEL_WIN+' убийств':'Ур. '+lvN+'/15 • '+loc(lvN||1)[0]+' • '+MODE[tier(lvN)]+' • '+(phase=='final'?'ГЛАВНЫЙ БОСС':phase=='mini'||phase=='exit'?'мини-босс':'волна '+wi+'/3'));
-  set('kill',DUEL?(CER.on?'🏆 Победитель дуэли!':P.dead?'Вы убиты — возрождение…':'Убейте соперника!'):CER.on?'🏆 Победитель уровня!':phase=='wave'?'Осталось зомби: '+left:phase=='gap'?'Следующая волна...':phase=='mini'?'Победите мини-босса!':phase=='final'?'Победите главного босса!':zs.length?'Зомби ещё сражаются! Возьмите ключ':'Возьмите ключ и идите к двери');
+  set('kill',DUEL?(CER.on?'🏆 Победитель дуэли!':P.dead?'Вы убиты — возрождение…':'Убейте соперника!'):CER.on?(CER.w.length?'🏆 Победитель уровня!':'🏁 Уровень пройден!'):phase=='wave'?'Осталось зомби: '+left:phase=='gap'?'Следующая волна...':phase=='mini'?'Победите мини-босса!':phase=='final'?'Победите главного босса!':zs.length?'Зомби ещё сражаются! Возьмите ключ':'Возьмите ключ и идите к двери');
   set('hits',(P.key?'🔑 Ключ-карта: есть':'🔑 Ключ-карта: нет')+' • 🎯 Автоогонь: '+(P.afT>0?Math.ceil(P.afT)+' с':'готов'));
   set('ammo',P.weapon==10?'🔨 Молот админа — У (E): прыжок и взрыв':P.weapon==1?'🔪 Нож':P.weapon==4?'💣 Гранаты: '+P.gren:'🔫 '+WPN[P.weapon].n+' '+(P.rel>0?'...':gm(P.weapon))+' / '+gr2(P.weapon));
   const mbz=zs.find(z=>z.boss&&!z.rising);$('boss').style.display=mbz?'block':'none';

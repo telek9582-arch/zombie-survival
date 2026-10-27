@@ -98,23 +98,43 @@ function lanIps() {
   return r.sort((a, b) => pri(a) - pri(b));
 }
 
-/* ---------- комната ---------- */
-let nid = 0, hostId = null;
-const CL = new Map();                 // id -> клиент
-const joined = () => [...CL.values()].filter(c => c.name != null).length;
+/* ---------- комнаты по городам (у каждой комнаты свой хост и до 8 игроков) ---------- */
+let nid = 0;
+const CL = new Map();                 // id -> соединение (клиент)
+const CITIES = [['Грозный', 3], ['Аргун', 2], ['Гудермес', 2], ['Урус-Мартан', 3], ['Шали', 2], ['Ачхой-Мартан', 1],
+                ['Курчалой', 1], ['Наур', 1], ['Ойсхар', 1], ['Серноводск', 1], ['ст. Шелковская', 1]];
+const ROOMS = new Map();              // id -> комната
+const ROOM_LIST = [];
+{ let k = 0;
+  for (const [city, cnt] of CITIES) for (let n = 1; n <= cnt; n++) {
+    const r = { id: 'r' + (++k), city, n, hostId: null, busy: false, mode: 'coop', members: new Map() };
+    ROOMS.set(r.id, r); ROOM_LIST.push(r);
+  } }
+const joined = r => [...r.members.values()].filter(c => c.name != null).length;
+const totalJoined = () => [...CL.values()].filter(c => c.name != null).length;
+const roomName = r => r.city + ', комната ' + r.n;
 
-function uniq(name) {
+function uniq(name, room) {
   let n = String(name || 'Игрок').replace(/[^\wа-яА-ЯёЁ \-.]/g, '').trim().slice(0, 16) || 'Игрок';
-  const used = new Set([...CL.values()].map(c => c.name)), base = n;
+  const used = new Set([...room.members.values()].map(c => c.name)), base = n;
   for (let i = 2; used.has(n); i++) n = base.slice(0, 13) + ' ' + i;
   return n;
 }
-function roster() {
-  return { s: 'players', host: hostId, list: [...CL.values()].filter(c => c.name != null).map(c => ({ id: c.id, name: c.name })) };
+function roster(room) {
+  return { s: 'players', host: room.hostId, list: [...room.members.values()].filter(c => c.name != null).map(c => ({ id: c.id, name: c.name })) };
 }
-function bcRoster() {
-  const t = JSON.stringify(roster());
-  for (const c of CL.values()) if (c.name != null) send(c, t);
+function bcRoster(room) {
+  const t = JSON.stringify(roster(room));
+  for (const c of room.members.values()) if (c.name != null) send(c, t);
+}
+function roomsInfo() {
+  return {
+    max: MAXP, rooms: ROOM_LIST.length, capacity: ROOM_LIST.length * MAXP, online: totalJoined(),
+    cities: CITIES.map(([city]) => ({
+      name: city,
+      rooms: ROOM_LIST.filter(r => r.city === city).map(r => ({ id: r.id, n: r.n, players: joined(r), host: r.hostId != null, busy: r.busy, mode: r.mode }))
+    }))
+  };
 }
 
 /* ---------- WebSocket (RFC 6455), минимальная реализация ---------- */
@@ -161,16 +181,18 @@ function drop(c) {
   if (!CL.has(c.id)) return;
   CL.delete(c.id);
   try { c.sock.destroy(); } catch (e) { }
-  if (c.name == null) return;
-  console.log('[-] вышел: ' + c.name);
-  if (c.id === hostId) {                                   // хост ушёл — комната закрывается
-    hostId = null;
-    const rest = [...CL.values()];
-    for (const o of rest) { if (o.name != null) send(o, { s: 'hostgone' }); }
-    CL.clear();
+  const room = c.room;
+  if (!room || c.name == null) return;
+  room.members.delete(c.id);
+  console.log('[-] вышел: ' + c.name + '  (' + roomName(room) + ')');
+  if (c.id === room.hostId) {                              // хост ушёл — эта комната закрывается (остальные работают)
+    room.hostId = null; room.busy = false; room.mode = 'coop';
+    const rest = [...room.members.values()];
+    room.members.clear();
+    for (const o of rest) { if (o.name != null) send(o, { s: 'hostgone' }); o.room = null; o.name = null; }
     setTimeout(() => rest.forEach(o => { try { o.sock.end(); } catch (e) { } }), 300);
-    console.log('[!] хост вышел, игра закрыта. Можно создать новую.');
-  } else bcRoster();
+    console.log('[!] хост вышел, комната «' + roomName(room) + '» закрыта. Можно создать новую.');
+  } else bcRoster(room);
 }
 
 function onMsg(c, txt) {
@@ -180,22 +202,31 @@ function onMsg(c, txt) {
 
   if (m.s === 'host' || m.s === 'join') {
     if (c.name != null) return;
-    if (m.s === 'host' && hostId != null) return send(c, { s: 'err', code: 'hostexists' });
-    if (m.s === 'join' && hostId == null) return send(c, { s: 'err', code: 'nohost' });
-    if (joined() >= MAXP) return send(c, { s: 'err', code: 'full' });
-    c.name = uniq(m.name);
-    if (m.s === 'host') hostId = c.id;
-    send(c, { s: 'welcome', id: c.id, name: c.name });
-    bcRoster();
-    console.log((m.s === 'host' ? '[+] ХОСТ: ' : '[+] игрок: ') + c.name + '  (всего: ' + joined() + ')');
+    const room = ROOMS.get(String(m.room));
+    if (!room) return send(c, { s: 'err', code: 'badroom' });
+    if (m.s === 'host' && room.hostId != null) return send(c, { s: 'err', code: 'hostexists' });
+    if (m.s === 'join' && room.hostId == null) return send(c, { s: 'err', code: 'nohost' });
+    if (joined(room) >= MAXP) return send(c, { s: 'err', code: 'full' });
+    c.room = room; room.members.set(c.id, c);
+    c.name = uniq(m.name, room);
+    if (m.s === 'host') { room.hostId = c.id; room.busy = false; room.mode = m.mode === 'duel' ? 'duel' : 'coop'; }
+    send(c, { s: 'welcome', id: c.id, name: c.name, room: room.id, roomName: roomName(room) });
+    bcRoster(room);
+    console.log((m.s === 'host' ? '[+] ХОСТ: ' : '[+] игрок: ') + c.name + '  → ' + roomName(room) + '  (в комнате: ' + joined(room) + ', онлайн: ' + totalJoined() + ')');
     return;
   }
-  if (c.name == null) return;
+  if (c.name == null || !c.room) return;
+  const room = c.room;
   if (m.s === 'm' && m.m && typeof m.m === 'object') {
+    if (c.id === room.hostId) {                            // по сообщениям хоста знаем, идёт ли игра
+      const t = m.m.t;
+      if (t === 'start') { room.busy = true; if (m.m.mode === 'duel') room.mode = 'duel'; }
+      else if (t === 'over' || t === 'duelend') room.busy = false;
+    }
     const out = JSON.stringify({ s: 'm', f: c.id, m: m.m });
-    if (m.to === 'all') { for (const o of CL.values()) if (o !== c && o.name != null) send(o, out); }
+    if (m.to === 'all') { for (const o of room.members.values()) if (o !== c && o.name != null) send(o, out); }
     else {
-      const o = CL.get(m.to === 'host' ? hostId : +m.to);
+      const o = room.members.get(m.to === 'host' ? room.hostId : +m.to);
       if (o && o !== c && o.name != null) send(o, out);
     }
   }
@@ -207,7 +238,11 @@ const handle = (req, res) => {
   const u = req.url.split('?')[0];
   if (u === '/info') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify({ ips: lanIps(), port: PORT, host: hostId != null, players: joined(), httpsPort: secure ? HTTPS_PORT : null }));
+    return res.end(JSON.stringify({ ips: lanIps(), port: PORT, players: totalJoined(), rooms: ROOM_LIST.length, httpsPort: secure ? HTTPS_PORT : null }));
+  }
+  if (u === '/rooms') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify(roomsInfo()));
   }
   const f = FILES[u];
   if (!f) { res.writeHead(404); return res.end('Not found'); }
@@ -278,6 +313,7 @@ ensureThree(() => server.listen(PORT, '0.0.0.0', () => {
   startSecure();
   if (!fs.existsSync(path.join(DIR, 'index.html'))) console.log('ВНИМАНИЕ: рядом с server.js нет index.html!');
   console.log('\n=== ZOMBIE SURVIVAL: сервер запущен ===\n');
+  console.log('Комнат: ' + ROOM_LIST.length + ' (городов: ' + CITIES.length + '), в каждой до ' + MAXP + ' игроков — всего до ' + ROOM_LIST.length * MAXP + '.\n');
   console.log((PROFILE === 'phone' ? 'На ЭТОМ телефоне откройте:   http://localhost:' : 'На ЭТОМ компьютере откройте:   http://localhost:') + PORT);
   const ips = lanIps();
   if (ips.length) { console.log('\nНа ТЕЛЕФОНАХ (та же Wi-Fi сеть) откройте:'); ips.forEach(ip => console.log('   http://' + ip + ':' + PORT)); }
