@@ -74,6 +74,121 @@ peUrFbs/ew==
 -----END CERTIFICATE-----
 `;
 
+
+/* ---------- администратор (проверка ТОЛЬКО на сервере; пароль в игре и на странице нигде не хранится) ---------- */
+const ADMIN_FILE = path.join(DIR, 'admin.json'), SITE_FILE = path.join(DIR, 'site.json');
+const hashPass = (pass, saltHex) => crypto.scryptSync(String(pass), Buffer.from(saltHex, 'hex'), 32, { N: 16384, r: 8, p: 1 }).toString('hex');
+if (process.argv[2] === 'setadmin') {                     // node server.js setadmin ЛОГИН ПАРОЛЬ
+  const login = process.argv[3], pass = process.argv[4];
+  if (!login || !pass || pass.length < 8) { console.log('Использование:  node server.js setadmin ЛОГИН ПАРОЛЬ   (пароль — минимум 8 символов)'); process.exit(1); }
+  const salt = crypto.randomBytes(16).toString('hex');
+  fs.writeFileSync(ADMIN_FILE, JSON.stringify({ login, salt, hash: hashPass(pass, salt) }, null, 2));
+  console.log('Готово: админ «' + login + '» сохранён в admin.json (пароль в файле не хранится, только хеш).'); process.exit(0);
+}
+let ADMIN = null, ADMIN_SRC = '';
+(function loadAdmin() {
+  if (process.env.ADMIN_LOGIN && process.env.ADMIN_PASS) {   // лучший вариант для хостинга: переменные окружения
+    const salt = crypto.randomBytes(16).toString('hex');
+    ADMIN = { login: String(process.env.ADMIN_LOGIN), salt, hash: hashPass(process.env.ADMIN_PASS, salt) }; ADMIN_SRC = 'переменные окружения'; return;
+  }
+  try { const j = JSON.parse(fs.readFileSync(ADMIN_FILE, 'utf8')); if (j.login && j.salt && j.hash) { ADMIN = j; ADMIN_SRC = 'admin.json'; } } catch (e) { }
+})();
+let SITE = { announce: '' };
+try { SITE = Object.assign(SITE, JSON.parse(fs.readFileSync(SITE_FILE, 'utf8'))); } catch (e) { }
+const saveSite = () => { try { fs.writeFileSync(SITE_FILE, JSON.stringify(SITE)); } catch (e) { console.log('site.json: ' + e.message); } };
+const SESS = new Map(), FAILS = new Map();               // токены входа и счётчик неудачных попыток по IP
+let adminSeen = 0;
+const ipOf = req => String((req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '');
+function sessOk(tok) { tok = String(tok || ''); const s = SESS.get(tok); if (!s) return null; if (Date.now() > s.exp) { SESS.delete(tok); return null; } return s; }
+function checkLogin(login, pass) {
+  if (!ADMIN) return false;
+  const a = Buffer.from(String(login || '')), b = Buffer.from(ADMIN.login);
+  const okL = a.length === b.length && crypto.timingSafeEqual(a, b);
+  const okP = crypto.timingSafeEqual(Buffer.from(hashPass(pass || '', ADMIN.salt), 'hex'), Buffer.from(ADMIN.hash, 'hex'));   // хеш считаем всегда — время ответа не выдаёт верный логин
+  return okL && okP;
+}
+const jsonRes = (res, code, o) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(o)); };
+function readJson(req, res, cb) {
+  let d = '', len = 0, dead = false;
+  req.on('data', c => { len += c.length; if (len > 20000) { dead = true; res.writeHead(413); res.end(); req.destroy(); return; } d += c; });
+  req.on('end', () => { if (dead) return; let j = null; try { j = JSON.parse(d || '{}'); } catch (e) { } cb(j && typeof j === 'object' ? j : {}); });
+}
+function broadcastAll(obj) { const t = JSON.stringify(obj); for (const c of CL.values()) if (c.name != null) send(c, t); }
+function adminLoginRoute(req, res) {
+  const ip = ipOf(req), f = FAILS.get(ip) || { n: 0, until: 0 };
+  if (f.until > Date.now()) return jsonRes(res, 429, { ok: false, err: 'Слишком много неверных попыток. Подождите 10 минут.' });
+  if (!ADMIN) return jsonRes(res, 503, { ok: false, err: 'Админ не настроен на сервере.' });
+  readJson(req, res, j => {
+    if (!checkLogin(j.login, j.pass)) {
+      f.n++; if (f.n >= 5) { f.until = Date.now() + 600000; f.n = 0; } FAILS.set(ip, f);
+      console.log('[ADMIN] неверный вход с ' + ip);
+      return setTimeout(() => jsonRes(res, 401, { ok: false, err: 'Неверный логин или пароль' }), 600);
+    }
+    FAILS.delete(ip);
+    const token = crypto.randomBytes(24).toString('hex');
+    SESS.set(token, { login: ADMIN.login, exp: Date.now() + 12 * 3600 * 1000 }); adminSeen = Date.now();
+    broadcastAll({ s: 'adm', text: '👑 Администратор вошёл на сайт' });
+    console.log('[ADMIN] вход выполнен (' + ip + ')');
+    jsonRes(res, 200, { ok: true, token, login: ADMIN.login });
+  });
+}
+function closeRoom(r, code) {
+  const rest = [...r.members.values()]; r.members.clear(); r.hostId = null; r.busy = false; r.mode = 'coop';
+  for (const o of rest) { if (o.name != null) send(o, { s: code }); o.room = null; o.name = null; }
+  setTimeout(() => rest.forEach(o => { try { o.sock.end(); } catch (e) { } }), 300);
+}
+function adminApi(req, res) {
+  readJson(req, res, j => {
+    const tok = String(req.headers['x-admin-token'] || ''), s = sessOk(tok);
+    if (!s) return jsonRes(res, 401, { ok: false, err: 'Нужен вход' });
+    adminSeen = Date.now();
+    const room = ROOMS.get(String(j.room));
+    switch (j.act) {
+      case 'state': return jsonRes(res, 200, { ok: true, login: s.login, online: totalJoined(), announce: SITE.announce || '',
+        rooms: ROOM_LIST.map(r => ({ id: r.id, city: r.city, n: r.n, mode: r.mode, busy: r.busy, hostId: r.hostId,
+          players: [...r.members.values()].filter(c => c.name != null).map(c => ({ id: c.id, name: c.name, admin: !!c.admin })) })) });
+      case 'kick': { const c = room && room.members.get(+j.id); if (!c) return jsonRes(res, 404, { ok: false, err: 'Нет такого игрока' });
+        send(c, { s: 'kicked' }); setTimeout(() => drop(c), 250); console.log('[ADMIN] выгнан: ' + c.name); return jsonRes(res, 200, { ok: true }); }
+      case 'close': if (!room) return jsonRes(res, 404, { ok: false, err: 'Нет такой комнаты' }); closeRoom(room, 'roomclosed'); console.log('[ADMIN] комната закрыта: ' + roomName(room)); return jsonRes(res, 200, { ok: true });
+      case 'say': { const text = String(j.text || '').trim().slice(0, 200); if (!text) return jsonRes(res, 400, { ok: false, err: 'Пустой текст' });
+        const msg = JSON.stringify({ s: 'say', name: s.login, text });
+        if (j.room === 'all') { for (const c of CL.values()) if (c.name != null) send(c, msg); }
+        else if (room) { for (const c of room.members.values()) send(c, msg); } else return jsonRes(res, 404, { ok: false, err: 'Нет такой комнаты' });
+        return jsonRes(res, 200, { ok: true }); }
+      case 'site': SITE.announce = String(j.announce || '').slice(0, 600); saveSite(); return jsonRes(res, 200, { ok: true });
+      case 'logout': SESS.delete(tok); return jsonRes(res, 200, { ok: true });
+      default: return jsonRes(res, 400, { ok: false, err: 'Неизвестное действие' });
+    }
+  });
+}
+const ADMIN_HTML = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Админ — Zombie Survival</title>
+<style>body{font-family:Arial,sans-serif;background:#10141c;color:#eee;margin:0;padding:14px}h1,h2{color:#ffd23f;margin:6px 0}input,textarea,button,select{font-size:15px;padding:8px 10px;border-radius:6px;border:1px solid #556;background:#1b2230;color:#fff;box-sizing:border-box}button{cursor:pointer;background:#2a6a9a;border:0}button.r{background:#a03030}button.s{padding:3px 8px;font-size:13px}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #334;padding:6px 8px;text-align:left;vertical-align:top;font-size:14px}.box{background:#161c28;border:1px solid #334;border-radius:8px;padding:12px;margin:12px 0}small{opacity:.7}.pl{display:inline-block;margin:2px 6px 2px 0;padding:2px 6px;background:#222c40;border-radius:5px}</style></head><body>
+<div id="lg" class="box" style="max-width:380px;margin:40px auto"><h1>🔑 Вход администратора</h1><p><input id="l" placeholder="Логин" autocomplete="off" style="width:100%"></p><p><input id="p" type="password" placeholder="Пароль" autocomplete="off" style="width:100%"></p><p><button id="go">ВОЙТИ</button> <span id="er" style="color:#ff8a8a"></span></p></div>
+<div id="pn" style="display:none"><h1>👑 Админ-панель <small id="who"></small> <button class="s r" id="out">Выйти</button></h1>
+<div class="box"><h2>Сообщение игрокам</h2><input id="mt" maxlength="200" placeholder="Текст сообщения" style="width:min(520px,100%)"> <select id="mr"><option value="all">Всем</option></select> <button id="ms">Отправить</button></div>
+<div class="box"><h2>Текст на первой странице игры</h2><small>Блок «Уважаемые игроки…». Пусто — стандартный текст. Каждая строка — с новой строки.</small><br><textarea id="an" rows="4" maxlength="600" style="width:min(620px,100%)"></textarea><br><button id="sv">Сохранить</button> <span id="ok" style="color:#7fff9f"></span></div>
+<div class="box"><h2>Комнаты <small id="on"></small></h2><table><thead><tr><th>Комната</th><th>Статус</th><th>Игроки</th><th></th></tr></thead><tbody id="rows"></tbody></table></div></div>
+<script>
+var T=sessionStorage.getItem('zs_admin_panel')||'';
+function api(a,d,cb){d=d||{};d.act=a;fetch('/admin/api',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':T},body:JSON.stringify(d)}).then(function(r){return r.json().then(function(j){return{c:r.status,j:j}})}).then(function(x){if(x.c==401){logout(true);return}cb&&cb(x.j)}).catch(function(){})}
+function show(on){document.getElementById('lg').style.display=on?'none':'block';document.getElementById('pn').style.display=on?'block':'none'}
+function logout(q){T='';sessionStorage.removeItem('zs_admin_panel');show(false);if(!q)api('logout')}
+document.getElementById('go').onclick=function(){var er=document.getElementById('er');er.textContent='';fetch('/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({login:document.getElementById('l').value.trim(),pass:document.getElementById('p').value})}).then(function(r){return r.json()}).then(function(j){if(j.ok){T=j.token;sessionStorage.setItem('zs_admin_panel',T);document.getElementById('p').value='';show(true);load(true)}else er.textContent=j.err||'Ошибка'}).catch(function(){er.textContent='Нет связи с сервером'})};
+document.getElementById('out').onclick=function(){logout(false)};
+document.getElementById('ms').onclick=function(){var t=document.getElementById('mt').value.trim();if(!t)return;api('say',{room:document.getElementById('mr').value,text:t},function(){document.getElementById('mt').value=''})};
+document.getElementById('sv').onclick=function(){api('site',{announce:document.getElementById('an').value},function(j){document.getElementById('ok').textContent=j.ok?'Сохранено ✔':'Ошибка';setTimeout(function(){document.getElementById('ok').textContent=''},2500)})};
+function el(t,c,x){var e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
+function load(first){api('state',{},function(j){if(!j.ok)return;document.getElementById('who').textContent='('+j.login+')';document.getElementById('on').textContent='— игроков онлайн: '+j.online;
+ if(first)document.getElementById('an').value=j.announce||'';
+ var sel=document.getElementById('mr'),cur=sel.value;sel.innerHTML='';var o=el('option',null,'Всем');o.value='all';sel.appendChild(o);j.rooms.forEach(function(r){var q=el('option',null,r.city+' — комната '+r.n);q.value=r.id;sel.appendChild(q)});sel.value=cur||'all';
+ var tb=document.getElementById('rows');tb.innerHTML='';j.rooms.forEach(function(r){var tr=el('tr');tr.appendChild(el('td',null,r.city+' — '+r.n));
+  tr.appendChild(el('td',null,r.hostId==null?'свободна':(r.mode=='duel'?'дуэль':'кооп')+(r.busy?' · идёт игра':' · ожидание')));
+  var tp=el('td');r.players.forEach(function(p){var b=el('span','pl',(p.id==r.hostId?'★ ':'')+p.name+' ');var k=el('button','s r','выгнать');k.onclick=function(){if(confirm('Выгнать '+p.name+'?'))api('kick',{room:r.id,id:p.id},function(){load()})};b.appendChild(k);tp.appendChild(b)});tr.appendChild(tp);
+  var tc=el('td');if(r.hostId!=null){var c=el('button','s r','закрыть комнату');c.onclick=function(){if(confirm('Закрыть комнату?'))api('close',{room:r.id},function(){load()})};tc.appendChild(c)}tr.appendChild(tc);tb.appendChild(tr)})})}
+if(T){show(true);load(true)}
+setInterval(function(){if(T)load()},3000);
+</script></body></html>`;
+
 /* ---------- адреса компьютера в локальной сети ---------- */
 function lanIps() {
   const r = [];
@@ -112,6 +227,7 @@ const ROOM_LIST = [];
   } }
 const joined = r => [...r.members.values()].filter(c => c.name != null).length;
 const totalJoined = () => [...CL.values()].filter(c => c.name != null).length;
+const plainName = n => String(n).replace(/^\u{1F451}\s*/u, '');
 const roomName = r => r.city + ', комната ' + r.n;
 
 function uniq(name, room) {
@@ -121,7 +237,7 @@ function uniq(name, room) {
   return n;
 }
 function roster(room) {
-  return { s: 'players', host: room.hostId, list: [...room.members.values()].filter(c => c.name != null).map(c => ({ id: c.id, name: c.name })) };
+  return { s: 'players', host: room.hostId, list: [...room.members.values()].filter(c => c.name != null).map(c => ({ id: c.id, name: c.name, admin: !!c.admin })) };
 }
 function bcRoster(room) {
   const t = JSON.stringify(roster(room));
@@ -130,9 +246,10 @@ function bcRoster(room) {
 function roomsInfo() {
   return {
     max: MAXP, rooms: ROOM_LIST.length, capacity: ROOM_LIST.length * MAXP, online: totalJoined(),
+    adminOnline: ROOM_LIST.some(r => [...r.members.values()].some(c => c.admin)) || (SESS.size > 0 && Date.now() - adminSeen < 15 * 60 * 1000),
     cities: CITIES.map(([city]) => ({
       name: city,
-      rooms: ROOM_LIST.filter(r => r.city === city).map(r => ({ id: r.id, n: r.n, players: joined(r), host: r.hostId != null, busy: r.busy, mode: r.mode }))
+      rooms: ROOM_LIST.filter(r => r.city === city).map(r => ({ id: r.id, n: r.n, players: joined(r), host: r.hostId != null, busy: r.busy, mode: r.mode, admin: [...r.members.values()].some(c => c.admin) }))
     }))
   };
 }
@@ -209,14 +326,19 @@ function onMsg(c, txt) {
     if (joined(room) >= MAXP) return send(c, { s: 'err', code: 'full' });
     c.room = room; room.members.set(c.id, c);
     c.name = uniq(m.name, room);
+    const adm = m.token ? sessOk(m.token) : null;
+    if (m.token && !adm) send(c, { s: 'adminfail' });
+    if (adm) { c.admin = true; c.name = '👑 ' + c.name; adminSeen = Date.now(); }
     if (m.s === 'host') { room.hostId = c.id; room.busy = false; room.mode = m.mode === 'duel' ? 'duel' : 'coop'; }
     send(c, { s: 'welcome', id: c.id, name: c.name, room: room.id, roomName: roomName(room) });
     bcRoster(room);
+    if (adm) { for (const o of room.members.values()) if (o !== c && o.name != null) send(o, { s: 'adm', text: '👑 Администратор ' + plainName(c.name) + ' вошёл в комнату' }); }
     console.log((m.s === 'host' ? '[+] ХОСТ: ' : '[+] игрок: ') + c.name + '  → ' + roomName(room) + '  (в комнате: ' + joined(room) + ', онлайн: ' + totalJoined() + ')');
     return;
   }
   if (c.name == null || !c.room) return;
   const room = c.room;
+  if (m.s === 'say' && c.admin) { const text = String(m.text || '').trim().slice(0, 200); if (text) { const out = JSON.stringify({ s: 'say', name: plainName(c.name), text }); for (const o of room.members.values()) send(o, out); } return; }
   if (m.s === 'm' && m.m && typeof m.m === 'object') {
     if (c.id === room.hostId) {                            // по сообщениям хоста знаем, идёт ли игра
       const t = m.m.t;
@@ -244,6 +366,10 @@ const handle = (req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(roomsInfo()));
   }
+  if (u === '/site') return jsonRes(res, 200, { announce: SITE.announce || '' });
+  if (u === '/admin' && req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff' }); return res.end(ADMIN_HTML); }
+  if (u === '/admin/login' && req.method === 'POST') return adminLoginRoute(req, res);
+  if (u === '/admin/api' && req.method === 'POST') return adminApi(req, res);
   const f = FILES[u];
   if (!f) { res.writeHead(404); return res.end('Not found'); }
   fs.readFile(path.join(DIR, f), (e, d) => {
@@ -313,6 +439,7 @@ ensureThree(() => server.listen(PORT, '0.0.0.0', () => {
   startSecure();
   if (!fs.existsSync(path.join(DIR, 'index.html'))) console.log('ВНИМАНИЕ: рядом с server.js нет index.html!');
   console.log('\n=== ZOMBIE SURVIVAL: сервер запущен ===\n');
+  console.log(ADMIN ? 'Админ: включён (' + ADMIN_SRC + '). Панель: /admin' : 'Админ: НЕ настроен (создайте: node server.js setadmin ЛОГИН ПАРОЛЬ).');
   console.log('Комнат: ' + ROOM_LIST.length + ' (городов: ' + CITIES.length + '), в каждой до ' + MAXP + ' игроков — всего до ' + ROOM_LIST.length * MAXP + '.\n');
   console.log((PROFILE === 'phone' ? 'На ЭТОМ телефоне откройте:   http://localhost:' : 'На ЭТОМ компьютере откройте:   http://localhost:') + PORT);
   const ips = lanIps();
