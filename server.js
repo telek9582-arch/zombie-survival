@@ -76,7 +76,7 @@ peUrFbs/ew==
 
 
 /* ---------- администратор (проверка ТОЛЬКО на сервере; пароль в игре и на странице нигде не хранится) ---------- */
-const ADMIN_FILE = path.join(DIR, 'admin.json'), SITE_FILE = path.join(DIR, 'site.json');
+const ADMIN_FILE = path.join(DIR, 'admin.json'), SITE_FILE = path.join(process.env.DATA_DIR || DIR, 'site.json');
 const hashPass = (pass, saltHex) => crypto.scryptSync(String(pass), Buffer.from(saltHex, 'hex'), 32, { N: 16384, r: 8, p: 1 }).toString('hex');
 if (process.argv[2] === 'setadmin') {                     // node server.js setadmin ЛОГИН ПАРОЛЬ
   const login = process.argv[3], pass = process.argv[4];
@@ -133,7 +133,7 @@ function adminLoginRoute(req, res) {
   });
 }
 function closeRoom(r, code) {
-  const rest = [...r.members.values()]; r.members.clear(); r.hostId = null; r.busy = false; r.mode = 'coop';
+  const rest = [...r.members.values()]; r.members.clear(); r.hostId = null; r.busy = false; r.mode = 'coop'; r.dead.clear();
   for (const o of rest) { if (o.name != null) send(o, { s: code }); o.room = null; o.name = null; }
   setTimeout(() => rest.forEach(o => { try { o.sock.end(); } catch (e) { } }), 300);
 }
@@ -155,6 +155,22 @@ function adminApi(req, res) {
         if (j.room === 'all') { for (const c of CL.values()) if (c.name != null) send(c, msg); }
         else if (room) { for (const c of room.members.values()) send(c, msg); } else return jsonRes(res, 404, { ok: false, err: 'Нет такой комнаты' });
         return jsonRes(res, 200, { ok: true }); }
+      case 'grant': case 'revoke': {
+        const k = String(j.name || '').toLowerCase(), u = ACC.users[k], cmd = String(j.cmd || '').toLowerCase().replace('/', '');
+        if (!u) return jsonRes(res, 404, { ok: false, err: 'Нет такого аккаунта' });
+        if (!GRANTABLE.includes(cmd)) return jsonRes(res, 400, { ok: false, err: 'Такую команду выдать нельзя. Можно: ' + GRANTABLE.join(', ') });
+        u.perms = u.perms || []; if (j.act === 'grant') { if (!u.perms.includes(cmd)) u.perms.push(cmd); } else u.perms = u.perms.filter(x => x !== cmd);
+        saveAcc(); pushPerms(k); console.log('[ADMIN] ' + j.act + ' /' + cmd + ' -> ' + u.name); return jsonRes(res, 200, { ok: true, perms: u.perms }); }
+      case 'setkills': {
+        const k = String(j.name || '').toLowerCase(), u = ACC.users[k]; if (!u) return jsonRes(res, 404, { ok: false, err: 'Нет такого аккаунта' });
+        u.kills = Math.max(0, Math.min(1000000, Math.floor(+j.kills) || 0)); saveAcc(); pushRank(k, false); return jsonRes(res, 200, { ok: true, kills: u.kills, rank: rankOf(u.kills) }); }
+      case 'accounts': return jsonRes(res, 200, { ok: true, total: Object.keys(ACC.users).length,
+        list: Object.values(ACC.users).sort((a, b) => b.created - a.created).slice(0, 500).map(u => ({ name: u.name, created: u.created, last: u.last || 0, banned: !!u.banned, kills: u.kills || 0, rank: rankOf(u.kills || 0), perms: u.perms || [],
+          online: [...CL.values()].some(c => c.acct === u.name.toLowerCase() && c.name != null) })) });
+      case 'ban': case 'unban': case 'delacc': {
+        const k = String(j.name || '').toLowerCase(), u = ACC.users[k]; if (!u) return jsonRes(res, 404, { ok: false, err: 'Нет такого аккаунта' });
+        if (j.act === 'delacc') delete ACC.users[k]; else u.banned = j.act === 'ban';
+        saveAcc(); if (j.act !== 'unban') kickAccount(k); console.log('[ADMIN] ' + j.act + ': ' + u.name); return jsonRes(res, 200, { ok: true }); }
       case 'site': SITE.announce = String(j.announce || '').slice(0, 600); saveSite(); return jsonRes(res, 200, { ok: true });
       case 'logout': SESS.delete(tok); return jsonRes(res, 200, { ok: true });
       default: return jsonRes(res, 400, { ok: false, err: 'Неизвестное действие' });
@@ -167,13 +183,14 @@ const ADMIN_HTML = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><
 <div id="pn" style="display:none"><h1>👑 Админ-панель <small id="who"></small> <button class="s r" id="out">Выйти</button></h1>
 <div class="box"><h2>Сообщение игрокам</h2><input id="mt" maxlength="200" placeholder="Текст сообщения" style="width:min(520px,100%)"> <select id="mr"><option value="all">Всем</option></select> <button id="ms">Отправить</button></div>
 <div class="box"><h2>Текст на первой странице игры</h2><small>Блок «Уважаемые игроки…». Пусто — стандартный текст. Каждая строка — с новой строки.</small><br><textarea id="an" rows="4" maxlength="600" style="width:min(620px,100%)"></textarea><br><button id="sv">Сохранить</button> <span id="ok" style="color:#7fff9f"></span></div>
+<div class="box"><h2>Игроки (аккаунты) <small id="ac"></small></h2><input id="af" placeholder="Поиск по имени" style="width:min(320px,100%)"><div style="max-height:320px;overflow:auto;margin-top:8px"><table><thead><tr><th>Имя</th><th>Ранг (убито)</th><th>Команды игрока</th><th>Был в игре</th><th>Статус</th><th></th></tr></thead><tbody id="arows"></tbody></table></div></div>
 <div class="box"><h2>Комнаты <small id="on"></small></h2><table><thead><tr><th>Комната</th><th>Статус</th><th>Игроки</th><th></th></tr></thead><tbody id="rows"></tbody></table></div></div>
 <script>
 var T=sessionStorage.getItem('zs_admin_panel')||'';
 function api(a,d,cb){d=d||{};d.act=a;fetch('/admin/api',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':T},body:JSON.stringify(d)}).then(function(r){return r.json().then(function(j){return{c:r.status,j:j}})}).then(function(x){if(x.c==401){logout(true);return}cb&&cb(x.j)}).catch(function(){})}
 function show(on){document.getElementById('lg').style.display=on?'none':'block';document.getElementById('pn').style.display=on?'block':'none'}
 function logout(q){T='';sessionStorage.removeItem('zs_admin_panel');show(false);if(!q)api('logout')}
-document.getElementById('go').onclick=function(){var er=document.getElementById('er');er.textContent='';fetch('/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({login:document.getElementById('l').value.trim(),pass:document.getElementById('p').value})}).then(function(r){return r.json()}).then(function(j){if(j.ok){T=j.token;sessionStorage.setItem('zs_admin_panel',T);document.getElementById('p').value='';show(true);load(true)}else er.textContent=j.err||'Ошибка'}).catch(function(){er.textContent='Нет связи с сервером'})};
+document.getElementById('go').onclick=function(){var er=document.getElementById('er');er.textContent='';fetch('/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({login:document.getElementById('l').value.trim(),pass:document.getElementById('p').value})}).then(function(r){return r.json()}).then(function(j){if(j.ok){T=j.token;sessionStorage.setItem('zs_admin_panel',T);document.getElementById('p').value='';show(true);load(true);loadAcc()}else er.textContent=j.err||'Ошибка'}).catch(function(){er.textContent='Нет связи с сервером'})};
 document.getElementById('out').onclick=function(){logout(false)};
 document.getElementById('ms').onclick=function(){var t=document.getElementById('mt').value.trim();if(!t)return;api('say',{room:document.getElementById('mr').value,text:t},function(){document.getElementById('mt').value=''})};
 document.getElementById('sv').onclick=function(){api('site',{announce:document.getElementById('an').value},function(j){document.getElementById('ok').textContent=j.ok?'Сохранено ✔':'Ошибка';setTimeout(function(){document.getElementById('ok').textContent=''},2500)})};
@@ -185,9 +202,129 @@ function load(first){api('state',{},function(j){if(!j.ok)return;document.getElem
   tr.appendChild(el('td',null,r.hostId==null?'свободна':(r.mode=='duel'?'дуэль':'кооп')+(r.busy?' · идёт игра':' · ожидание')));
   var tp=el('td');r.players.forEach(function(p){var b=el('span','pl',(p.id==r.hostId?'★ ':'')+p.name+' ');var k=el('button','s r','выгнать');k.onclick=function(){if(confirm('Выгнать '+p.name+'?'))api('kick',{room:r.id,id:p.id},function(){load()})};b.appendChild(k);tp.appendChild(b)});tr.appendChild(tp);
   var tc=el('td');if(r.hostId!=null){var c=el('button','s r','закрыть комнату');c.onclick=function(){if(confirm('Закрыть комнату?'))api('close',{room:r.id},function(){load()})};tc.appendChild(c)}tr.appendChild(tc);tb.appendChild(tr)})})}
-if(T){show(true);load(true)}
-setInterval(function(){if(T)load()},3000);
+var CMDS=['god','heal','ammo','run','jump','power','rapid','freeze','gg','tpa','killall','say'];
+var RN=['Солдат','Ефрейтор','Сержант','Старшина','Лейтенант','Капитан','Майор','Полковник','Генерал','Маршал'];
+function loadAcc(){api('accounts',{},function(j){if(!j.ok)return;var f=(document.getElementById('af').value||'').toLowerCase();document.getElementById('ac').textContent='— всего: '+j.total;var tb=document.getElementById('arows');tb.innerHTML='';
+ j.list.filter(function(u){return !f||u.name.toLowerCase().indexOf(f)>=0}).forEach(function(u){var tr=el('tr');
+  tr.appendChild(el('td',null,(u.online?'🟢 ':'')+u.name));
+  var tk=el('td',null,RN[u.rank-1]+' ('+u.kills+') ');var kb=el('button','s','изм.');kb.onclick=function(){var v=prompt('Сколько убитых зомби записать игроку '+u.name+'?',u.kills);if(v!==null)api('setkills',{name:u.name,kills:+v},function(){loadAcc()})};tk.appendChild(kb);tr.appendChild(tk);
+  var tp=el('td');(u.perms||[]).forEach(function(c){var b=el('span','pl','/'+c+' ');var x=el('button','s r','✕');x.title='отобрать команду';x.onclick=function(){api('revoke',{name:u.name,cmd:c},function(){loadAcc()})};b.appendChild(x);tp.appendChild(b)});
+  var sel=el('select');CMDS.forEach(function(c){if((u.perms||[]).indexOf(c)<0){var o=el('option',null,'/'+c);o.value=c;sel.appendChild(o)}});
+  if(sel.options.length){var gb=el('button','s','выдать');gb.style.marginLeft='4px';gb.onclick=function(){api('grant',{name:u.name,cmd:sel.value},function(){loadAcc()})};tp.appendChild(sel);tp.appendChild(gb)}tr.appendChild(tp);
+  tr.appendChild(el('td',null,u.last?new Date(u.last).toLocaleString('ru-RU'):'—'));
+  tr.appendChild(el('td',null,u.banned?'🚫 заблокирован':'активен'));
+  var tc=el('td'),b=el('button','s '+(u.banned?'':'r'),u.banned?'разблокировать':'заблокировать');b.onclick=function(){api(u.banned?'unban':'ban',{name:u.name},function(){loadAcc()})};tc.appendChild(b);
+  var d=el('button','s r','удалить');d.style.marginLeft='6px';d.onclick=function(){if(confirm('Удалить аккаунт '+u.name+'?'))api('delacc',{name:u.name},function(){loadAcc()})};tc.appendChild(d);tr.appendChild(tc);tb.appendChild(tr)})})}
+document.getElementById('af').oninput=function(){loadAcc()};
+if(T){show(true);load(true);loadAcc()}
+var tick=0;setInterval(function(){if(T){load();var a=document.activeElement;if(++tick%5==0&&!(a&&(a.tagName=='SELECT'||a.tagName=='INPUT')))loadAcc()}},3000);
 </script></body></html>`;
+
+
+/* ---------- аккаунты игроков (регистрация обязательна, «гостей» нет) ---------- */
+// DATA_DIR — папка для accounts.json и site.json. На хостинге с временным диском (Render без Disk)
+// аккаунты сбрасываются при перезапуске; для постоянных аккаунтов подключите Disk и задайте DATA_DIR.
+const DATA_DIR = process.env.DATA_DIR || DIR;
+const ACC_FILE = path.join(DATA_DIR, 'accounts.json');
+let ACC = { secret: '', users: {} };
+try { ACC = Object.assign(ACC, JSON.parse(fs.readFileSync(ACC_FILE, 'utf8'))); } catch (e) { }
+if (!ACC.secret) ACC.secret = crypto.randomBytes(32).toString('hex');
+function saveAcc() {
+  try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(ACC_FILE + '.tmp', JSON.stringify(ACC)); fs.renameSync(ACC_FILE + '.tmp', ACC_FILE); }
+  catch (e) { console.log('accounts.json: ' + e.message); }
+}
+saveAcc();
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { try { saveAcc(); } catch (e) { } process.exit(0); });   // сохранить аккаунты при остановке/перезапуске
+const NAME_RE = /^[A-Za-zА-Яа-яЁё0-9_.-]{3,16}$/;
+const RESERVED = new Set(['гость', 'guest', 'admin', 'админ', 'администратор', 'система', 'system', 'zs-admin']);
+const b64u = b => Buffer.from(b).toString('base64url');
+function mkToken(name) {
+  const p = b64u(name + '|' + (Date.now() + 30 * 864e5));
+  return p + '.' + crypto.createHmac('sha256', ACC.secret).update(p).digest('hex').slice(0, 40);
+}
+function verifyToken(tok) {                       // -> аккаунт или null (подпись, срок, аккаунт существует)
+  tok = String(tok || ''); const i = tok.indexOf('.'); if (i < 1) return null;
+  const p = tok.slice(0, i), sig = tok.slice(i + 1);
+  const good = crypto.createHmac('sha256', ACC.secret).update(p).digest('hex').slice(0, 40);
+  if (sig.length !== good.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(good))) return null;
+  let t; try { t = Buffer.from(p, 'base64url').toString('utf8').split('|'); } catch (e) { return null; }
+  if (!(+t[1] > Date.now())) return null;
+  return ACC.users[String(t[0]).toLowerCase()] || null;
+}
+// Лимиты рассчитаны на общий адрес (школа, семья, мобильный оператор): много игроков могут делить один IP.
+const REG_LIMIT = +process.env.REG_LIMIT || 60;             // регистраций с одного адреса в час
+
+/* ---------- ранги (привязаны к аккаунту) и выданные команды ---------- */
+const RANK_NEED = [0, 30, 90, 190, 340, 560, 860, 1260, 1780, 2480];     // сколько убитых зомби нужно для ранга 1…10
+const rankOf = k => { let r = 1; for (let i = 1; i < RANK_NEED.length; i++) if (k >= RANK_NEED[i]) r = i + 1; return r; };
+const GRANTABLE = ['gg', 'tpa', 'god', 'heal', 'ammo', 'killall', 'say', 'run', 'jump', 'power', 'rapid', 'freeze'];
+const userView = u => ({ kills: u.kills || 0, rank: rankOf(u.kills || 0), perms: u.perms || [] });
+let accSaveT = 0;
+const saveAccSoon = () => { if (accSaveT) return; accSaveT = setTimeout(() => { accSaveT = 0; saveAcc(); }, 3000); };
+function addKills(u, n) { const b = rankOf(u.kills || 0); u.kills = (u.kills || 0) + n; saveAccSoon(); return rankOf(u.kills) > b; }
+const KWIN = new Map();                                                    // одиночная игра: не больше 500 убийств в час на аккаунт
+function authKills(req, res) {
+  const u = verifyToken(req.headers['x-auth']);
+  if (!u) return jsonRes(res, 401, { ok: false, err: 'auth' });
+  if (u.banned) return jsonRes(res, 403, { ok: false, err: 'banned' });
+  readJson(req, res, j => {
+    let n = Math.min(80, Math.floor(+j.n) || 0), up = false;
+    if (n > 0) {
+      const now = Date.now(); let w = KWIN.get(u.name); if (!w || now - w.t > 3600000) w = { t: now, n: 0 };
+      n = Math.max(0, Math.min(n, 500 - w.n)); w.n += n; KWIN.set(u.name, w);
+      if (n > 0) up = addKills(u, n);
+    }
+    jsonRes(res, 200, Object.assign({ ok: true, up }, userView(u)));
+  });
+}
+function pushRank(key, up) {
+  const u = ACC.users[key]; if (!u) return;
+  for (const c of CL.values()) if (c.acct === key) {
+    c.rank = rankOf(u.kills || 0); send(c, { s: 'rank', kills: u.kills || 0, rank: c.rank, up: !!up });
+    if (c.room) bcRoster(c.room);
+  }
+}
+function pushPerms(key) { const u = ACC.users[key]; if (!u) return; for (const c of CL.values()) if (c.acct === key) send(c, { s: 'perms', list: u.perms || [] }); }
+
+const REGS = new Map(), LFAILS = new Map(), NFAILS = new Map();
+function kickAccount(key) { for (const c of [...CL.values()]) if (c.acct === key) { send(c, { s: 'kicked' }); setTimeout(() => drop(c), 250); } }
+function authRegister(req, res) {
+  const ip = ipOf(req), now = Date.now(), list = (REGS.get(ip) || []).filter(t => now - t < 3600000);
+  if (list.length >= REG_LIMIT) return jsonRes(res, 429, { ok: false, err: 'Слишком много регистраций с вашего адреса. Попробуйте позже.' });
+  readJson(req, res, j => {
+    const name = String(j.name || '').trim(), pass = String(j.pass || '');
+    if (!NAME_RE.test(name)) return jsonRes(res, 400, { ok: false, err: 'Имя: 3–16 символов (буквы, цифры, _ - .)' });
+    if (pass.length < 6 || pass.length > 64) return jsonRes(res, 400, { ok: false, err: 'Пароль: от 6 символов' });
+    const key = name.toLowerCase();
+    if (RESERVED.has(key) || (ADMIN && key === String(ADMIN.login).toLowerCase())) return jsonRes(res, 400, { ok: false, err: 'Это имя зарезервировано' });
+    if (ACC.users[key]) return jsonRes(res, 409, { ok: false, err: 'Такое имя уже занято' });
+    const salt = crypto.randomBytes(16).toString('hex');
+    ACC.users[key] = { name, salt, hash: hashPass(pass, salt), created: now, last: now, banned: false, kills: 0, perms: [] };
+    saveAcc(); list.push(now); REGS.set(ip, list);
+    console.log('[+] аккаунт: ' + name + '  (всего: ' + Object.keys(ACC.users).length + ')');
+    jsonRes(res, 200, Object.assign({ ok: true, name, token: mkToken(name) }, userView(ACC.users[key])));
+  });
+}
+const DUMMY_SALT = crypto.randomBytes(16).toString('hex');
+function authLogin(req, res) {
+  const ip = ipOf(req);
+  readJson(req, res, j => {
+    const nm = String(j.name || '').trim().toLowerCase(), key = ip + '|' + nm;     // блокировка по паре «адрес + имя», а не по всему адресу
+    const f = LFAILS.get(key) || { n: 0, until: 0 }, g = NFAILS.get(nm) || { n: 0, until: 0 };
+    if (f.until > Date.now() || g.until > Date.now()) return jsonRes(res, 429, { ok: false, err: 'Слишком много неверных попыток. Подождите 10 минут.' });
+    const u = ACC.users[nm];
+    const h = hashPass(String(j.pass || ''), u ? u.salt : DUMMY_SALT);          // время ответа не выдаёт, есть ли такое имя
+    const good = u && crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(u.hash, 'hex'));
+    if (!good) {
+      f.n++; if (f.n >= 10) { f.until = Date.now() + 600000; f.n = 0; } LFAILS.set(key, f);
+      g.n++; if (g.n >= 60) { g.until = Date.now() + 600000; g.n = 0; } NFAILS.set(nm, g);      // подбор с многих адресов по одному имени
+      return setTimeout(() => jsonRes(res, 401, { ok: false, err: u ? 'Неверный пароль' : 'Такого аккаунта нет — нажмите «Регистрация»' }), 400);
+    }
+    if (u.banned) return jsonRes(res, 403, { ok: false, err: 'Аккаунт заблокирован администратором' });
+    LFAILS.delete(key); u.last = Date.now(); saveAcc();
+    jsonRes(res, 200, Object.assign({ ok: true, name: u.name, token: mkToken(u.name) }, userView(u)));
+  });
+}
 
 /* ---------- адреса компьютера в локальной сети ---------- */
 function lanIps() {
@@ -222,7 +359,7 @@ const ROOMS = new Map();              // id -> комната
 const ROOM_LIST = [];
 { let k = 0;
   for (const [city, cnt] of CITIES) for (let n = 1; n <= cnt; n++) {
-    const r = { id: 'r' + (++k), city, n, hostId: null, busy: false, mode: 'coop', members: new Map() };
+    const r = { id: 'r' + (++k), city, n, hostId: null, busy: false, mode: 'coop', members: new Map(), dead: new Set() };
     ROOMS.set(r.id, r); ROOM_LIST.push(r);
   } }
 const joined = r => [...r.members.values()].filter(c => c.name != null).length;
@@ -237,7 +374,7 @@ function uniq(name, room) {
   return n;
 }
 function roster(room) {
-  return { s: 'players', host: room.hostId, list: [...room.members.values()].filter(c => c.name != null).map(c => ({ id: c.id, name: c.name, admin: !!c.admin })) };
+  return { s: 'players', host: room.hostId, list: [...room.members.values()].filter(c => c.name != null).map(c => ({ id: c.id, name: c.name, admin: !!c.admin, rank: c.rank || 1 })) };
 }
 function bcRoster(room) {
   const t = JSON.stringify(roster(room));
@@ -303,7 +440,7 @@ function drop(c) {
   room.members.delete(c.id);
   console.log('[-] вышел: ' + c.name + '  (' + roomName(room) + ')');
   if (c.id === room.hostId) {                              // хост ушёл — эта комната закрывается (остальные работают)
-    room.hostId = null; room.busy = false; room.mode = 'coop';
+    room.hostId = null; room.busy = false; room.mode = 'coop'; room.dead.clear();
     const rest = [...room.members.values()];
     room.members.clear();
     for (const o of rest) { if (o.name != null) send(o, { s: 'hostgone' }); o.room = null; o.name = null; }
@@ -319,18 +456,24 @@ function onMsg(c, txt) {
 
   if (m.s === 'host' || m.s === 'join') {
     if (c.name != null) return;
+    const acc = verifyToken(m.auth);
+    if (!acc) return send(c, { s: 'err', code: 'auth' });
+    if (acc.banned) return send(c, { s: 'err', code: 'banned' });
+    const key = acc.name.toLowerCase();
+    for (const o of [...CL.values()]) if (o !== c && o.acct === key) { send(o, { s: 'replaced' }); drop(o); }   // один аккаунт — одно подключение
     const room = ROOMS.get(String(m.room));
     if (!room) return send(c, { s: 'err', code: 'badroom' });
+    if (m.s === 'join' && room.mode !== 'duel' && room.dead.has(key)) return send(c, { s: 'err', code: 'dead' });   // погибший не может перезайти до следующего уровня
     if (m.s === 'host' && room.hostId != null) return send(c, { s: 'err', code: 'hostexists' });
     if (m.s === 'join' && room.hostId == null) return send(c, { s: 'err', code: 'nohost' });
     if (joined(room) >= MAXP) return send(c, { s: 'err', code: 'full' });
     c.room = room; room.members.set(c.id, c);
-    c.name = uniq(m.name, room);
+    c.acct = key; c.name = acc.name; c.rank = rankOf(acc.kills || 0);
     const adm = m.token ? sessOk(m.token) : null;
     if (m.token && !adm) send(c, { s: 'adminfail' });
     if (adm) { c.admin = true; c.name = '👑 ' + c.name; adminSeen = Date.now(); }
     if (m.s === 'host') { room.hostId = c.id; room.busy = false; room.mode = m.mode === 'duel' ? 'duel' : 'coop'; }
-    send(c, { s: 'welcome', id: c.id, name: c.name, room: room.id, roomName: roomName(room) });
+    send(c, { s: 'welcome', id: c.id, name: c.name, room: room.id, roomName: roomName(room), kills: acc.kills || 0, rank: c.rank, perms: acc.perms || [] });
     bcRoster(room);
     if (adm) { for (const o of room.members.values()) if (o !== c && o.name != null) send(o, { s: 'adm', text: '👑 Администратор ' + plainName(c.name) + ' вошёл в комнату' }); }
     console.log((m.s === 'host' ? '[+] ХОСТ: ' : '[+] игрок: ') + c.name + '  → ' + roomName(room) + '  (в комнате: ' + joined(room) + ', онлайн: ' + totalJoined() + ')');
@@ -338,13 +481,25 @@ function onMsg(c, txt) {
   }
   if (c.name == null || !c.room) return;
   const room = c.room;
-  if (m.s === 'say' && c.admin) { const text = String(m.text || '').trim().slice(0, 200); if (text) { const out = JSON.stringify({ s: 'say', name: plainName(c.name), text }); for (const o of room.members.values()) send(o, out); } return; }
+  if (m.s === 'kills' && c.id === room.hostId && m.d && typeof m.d === 'object' && room.mode !== 'duel') {
+    const now = Date.now(); if (!room.kw || now - room.kw.t > 30000) room.kw = { t: now, n: 0 };
+    for (const id of Object.keys(m.d).slice(0, 10)) {
+      const o = room.members.get(+id), u = o && ACC.users[o.acct]; let n = Math.floor(+m.d[id]);
+      if (!u || !(n > 0)) continue; n = Math.min(n, 40); if (room.kw.n + n > 150) break; room.kw.n += n;     // защита от накрутки: не больше 150 убийств за 30 секунд на комнату
+      const up = addKills(u, n); o.rank = rankOf(u.kills);
+      send(o, { s: 'rank', kills: u.kills, rank: o.rank, up });
+      if (up) { bcRoster(room); for (const x of room.members.values()) send(x, { s: 'rankup', name: o.name, rank: o.rank }); }
+    }
+    return;
+  }
+  if (m.s === 'say' && (c.admin || ((ACC.users[c.acct] || {}).perms || []).includes('say'))) { const text = String(m.text || '').trim().slice(0, 200); if (text) { const out = JSON.stringify({ s: 'say', name: plainName(c.name), text }); for (const o of room.members.values()) send(o, out); } return; }
   if (m.s === 'm' && m.m && typeof m.m === 'object') {
     if (c.id === room.hostId) {                            // по сообщениям хоста знаем, идёт ли игра
       const t = m.m.t;
       if (t === 'start') { room.busy = true; if (m.m.mode === 'duel') room.mode = 'duel'; }
       else if (t === 'over' || t === 'duelend') room.busy = false;
-    }
+      if (m.to === 'all' && (t === 'lvl' || t === 'start' || t === 'over' || t === 'duelend')) room.dead.clear();      // новый уровень — все воскресают
+    } else if (m.m.t === 'dead' && room.mode !== 'duel') room.dead.add(c.acct);
     const out = JSON.stringify({ s: 'm', f: c.id, m: m.m });
     if (m.to === 'all') { for (const o of room.members.values()) if (o !== c && o.name != null) send(o, out); }
     else {
@@ -367,6 +522,11 @@ const handle = (req, res) => {
     return res.end(JSON.stringify(roomsInfo()));
   }
   if (u === '/site') return jsonRes(res, 200, { announce: SITE.announce || '' });
+  if (u === '/auth/info') return jsonRes(res, 200, { ok: true, accounts: Object.keys(ACC.users).length });
+  if (u === '/auth/register' && req.method === 'POST') return authRegister(req, res);
+  if (u === '/auth/login' && req.method === 'POST') return authLogin(req, res);
+  if (u === '/auth/kills' && req.method === 'POST') return authKills(req, res);
+  if (u === '/auth/me') { const a = verifyToken(req.headers['x-auth']); return a && !a.banned ? jsonRes(res, 200, Object.assign({ ok: true, name: a.name }, userView(a))) : jsonRes(res, 401, { ok: false }); }
   if (u === '/admin' && req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff' }); return res.end(ADMIN_HTML); }
   if (u === '/admin/login' && req.method === 'POST') return adminLoginRoute(req, res);
   if (u === '/admin/api' && req.method === 'POST') return adminApi(req, res);
