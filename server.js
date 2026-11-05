@@ -126,10 +126,11 @@ function adminLoginRoute(req, res) {
     }
     FAILS.delete(ip);
     const token = crypto.randomBytes(24).toString('hex');
-    SESS.set(token, { login: ADMIN.login, exp: Date.now() + 12 * 3600 * 1000 }); adminSeen = Date.now();
+    const exp = Date.now() + (j.remember ? 30 * 864e5 : 12 * 3600 * 1000);
+    SESS.set(token, { login: ADMIN.login, exp }); adminSeen = Date.now();
     broadcastAll({ s: 'adm', text: '👑 Администратор вошёл на сайт' });
     console.log('[ADMIN] вход выполнен (' + ip + ')');
-    jsonRes(res, 200, { ok: true, token, login: ADMIN.login });
+    jsonRes(res, 200, { ok: true, token, login: ADMIN.login, exp });
   });
 }
 function closeRoom(r, code) {
@@ -158,7 +159,7 @@ function adminApi(req, res) {
       case 'grant': case 'revoke': {
         const k = String(j.name || '').toLowerCase(), u = ACC.users[k], cmd = String(j.cmd || '').toLowerCase().replace('/', '');
         if (!u) return jsonRes(res, 404, { ok: false, err: 'Нет такого аккаунта' });
-        if (!GRANTABLE.includes(cmd)) return jsonRes(res, 400, { ok: false, err: 'Такую команду выдать нельзя. Можно: ' + GRANTABLE.join(', ') });
+        if (!GRANTABLE.includes(cmd)) return jsonRes(res, 400, { ok: false, err: 'Выдавать можно только способности: ' + GRANTABLE.map(c => ABIL_NAME[c] + ' (' + c + ')').join(', ') });
         u.perms = u.perms || []; if (j.act === 'grant') { if (!u.perms.includes(cmd)) u.perms.push(cmd); } else u.perms = u.perms.filter(x => x !== cmd);
         saveAcc(); pushPerms(k); console.log('[ADMIN] ' + j.act + ' /' + cmd + ' -> ' + u.name); return jsonRes(res, 200, { ok: true, perms: u.perms }); }
       case 'setkills': {
@@ -183,7 +184,7 @@ const ADMIN_HTML = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><
 <div id="pn" style="display:none"><h1>👑 Админ-панель <small id="who"></small> <button class="s r" id="out">Выйти</button></h1>
 <div class="box"><h2>Сообщение игрокам</h2><input id="mt" maxlength="200" placeholder="Текст сообщения" style="width:min(520px,100%)"> <select id="mr"><option value="all">Всем</option></select> <button id="ms">Отправить</button></div>
 <div class="box"><h2>Текст на первой странице игры</h2><small>Блок «Уважаемые игроки…». Пусто — стандартный текст. Каждая строка — с новой строки.</small><br><textarea id="an" rows="4" maxlength="600" style="width:min(620px,100%)"></textarea><br><button id="sv">Сохранить</button> <span id="ok" style="color:#7fff9f"></span></div>
-<div class="box"><h2>Игроки (аккаунты) <small id="ac"></small></h2><input id="af" placeholder="Поиск по имени" style="width:min(320px,100%)"><div style="max-height:320px;overflow:auto;margin-top:8px"><table><thead><tr><th>Имя</th><th>Ранг (убито)</th><th>Команды игрока</th><th>Был в игре</th><th>Статус</th><th></th></tr></thead><tbody id="arows"></tbody></table></div></div>
+<div class="box"><h2>Игроки (аккаунты) <small id="ac"></small></h2><input id="af" placeholder="Поиск по имени" style="width:min(320px,100%)"><div style="max-height:320px;overflow:auto;margin-top:8px"><table><thead><tr><th>Имя</th><th>Ранг (убито)</th><th>Способности игрока</th><th>Был в игре</th><th>Статус</th><th></th></tr></thead><tbody id="arows"></tbody></table></div></div>
 <div class="box"><h2>Комнаты <small id="on"></small></h2><table><thead><tr><th>Комната</th><th>Статус</th><th>Игроки</th><th></th></tr></thead><tbody id="rows"></tbody></table></div></div>
 <script>
 var T=sessionStorage.getItem('zs_admin_panel')||'';
@@ -202,14 +203,15 @@ function load(first){api('state',{},function(j){if(!j.ok)return;document.getElem
   tr.appendChild(el('td',null,r.hostId==null?'свободна':(r.mode=='duel'?'дуэль':'кооп')+(r.busy?' · идёт игра':' · ожидание')));
   var tp=el('td');r.players.forEach(function(p){var b=el('span','pl',(p.id==r.hostId?'★ ':'')+p.name+' ');var k=el('button','s r','выгнать');k.onclick=function(){if(confirm('Выгнать '+p.name+'?'))api('kick',{room:r.id,id:p.id},function(){load()})};b.appendChild(k);tp.appendChild(b)});tr.appendChild(tp);
   var tc=el('td');if(r.hostId!=null){var c=el('button','s r','закрыть комнату');c.onclick=function(){if(confirm('Закрыть комнату?'))api('close',{room:r.id},function(){load()})};tc.appendChild(c)}tr.appendChild(tc);tb.appendChild(tr)})})}
-var CMDS=['god','heal','ammo','run','jump','power','rapid','freeze','gg','tpa','killall','say'];
+var CMDS=['god','run','jump','power','rapid','heal'];
+var AN={god:'Бессмертие',run:'Быстрый бег',jump:'Высокий прыжок',power:'Усиленный урон ×5',rapid:'Бесконечные патроны',heal:'Быстрое лечение'};
 var RN=['Солдат','Ефрейтор','Сержант','Старшина','Лейтенант','Капитан','Майор','Полковник','Генерал','Маршал'];
 function loadAcc(){api('accounts',{},function(j){if(!j.ok)return;var f=(document.getElementById('af').value||'').toLowerCase();document.getElementById('ac').textContent='— всего: '+j.total;var tb=document.getElementById('arows');tb.innerHTML='';
  j.list.filter(function(u){return !f||u.name.toLowerCase().indexOf(f)>=0}).forEach(function(u){var tr=el('tr');
   tr.appendChild(el('td',null,(u.online?'🟢 ':'')+u.name));
   var tk=el('td',null,RN[u.rank-1]+' ('+u.kills+') ');var kb=el('button','s','изм.');kb.onclick=function(){var v=prompt('Сколько убитых зомби записать игроку '+u.name+'?',u.kills);if(v!==null)api('setkills',{name:u.name,kills:+v},function(){loadAcc()})};tk.appendChild(kb);tr.appendChild(tk);
-  var tp=el('td');(u.perms||[]).forEach(function(c){var b=el('span','pl','/'+c+' ');var x=el('button','s r','✕');x.title='отобрать команду';x.onclick=function(){api('revoke',{name:u.name,cmd:c},function(){loadAcc()})};b.appendChild(x);tp.appendChild(b)});
-  var sel=el('select');CMDS.forEach(function(c){if((u.perms||[]).indexOf(c)<0){var o=el('option',null,'/'+c);o.value=c;sel.appendChild(o)}});
+  var tp=el('td');(u.perms||[]).forEach(function(c){var b=el('span','pl',(AN[c]||c)+' ');var x=el('button','s r','✕');x.title='отобрать команду';x.onclick=function(){api('revoke',{name:u.name,cmd:c},function(){loadAcc()})};b.appendChild(x);tp.appendChild(b)});
+  var sel=el('select');CMDS.forEach(function(c){if((u.perms||[]).indexOf(c)<0){var o=el('option',null,AN[c]);o.value=c;sel.appendChild(o)}});
   if(sel.options.length){var gb=el('button','s','выдать');gb.style.marginLeft='4px';gb.onclick=function(){api('grant',{name:u.name,cmd:sel.value},function(){loadAcc()})};tp.appendChild(sel);tp.appendChild(gb)}tr.appendChild(tp);
   tr.appendChild(el('td',null,u.last?new Date(u.last).toLocaleString('ru-RU'):'—'));
   tr.appendChild(el('td',null,u.banned?'🚫 заблокирован':'активен'));
@@ -257,7 +259,11 @@ const REG_LIMIT = +process.env.REG_LIMIT || 60;             // регистра�
 /* ---------- ранги (привязаны к аккаунту) и выданные команды ---------- */
 const RANK_NEED = [0, 30, 90, 190, 340, 560, 860, 1260, 1780, 2480];     // сколько убитых зомби нужно для ранга 1…10
 const rankOf = k => { let r = 1; for (let i = 1; i < RANK_NEED.length; i++) if (k >= RANK_NEED[i]) r = i + 1; return r; };
-const GRANTABLE = ['gg', 'tpa', 'god', 'heal', 'ammo', 'killall', 'say', 'run', 'jump', 'power', 'rapid', 'freeze'];
+// Выдаются только «способности» (действуют, пока выданы). Команды вроде /gg /tpa /killall /say /freeze /ammo — только админу.
+const GRANTABLE = ['god', 'run', 'jump', 'power', 'rapid', 'heal'];
+const ABIL_NAME = { god: 'Бессмертие', run: 'Быстрый бег', jump: 'Высокий прыжок', power: 'Усиленный урон', rapid: 'Бесконечные патроны', heal: 'Быстрое лечение' };
+for (const u of Object.values(ACC.users)) u.perms = (u.perms || []).filter(c => GRANTABLE.includes(c));
+const cheated = u => !!u && (u.perms || []).some(c => GRANTABLE.includes(c));     // есть способности админа — убийства в ранг не идут
 const userView = u => ({ kills: u.kills || 0, rank: rankOf(u.kills || 0), perms: u.perms || [] });
 let accSaveT = 0;
 const saveAccSoon = () => { if (accSaveT) return; accSaveT = setTimeout(() => { accSaveT = 0; saveAcc(); }, 3000); };
@@ -269,6 +275,7 @@ function authKills(req, res) {
   if (u.banned) return jsonRes(res, 403, { ok: false, err: 'banned' });
   readJson(req, res, j => {
     let n = Math.min(80, Math.floor(+j.n) || 0), up = false;
+    if (cheated(u) || sessOk(req.headers['x-admin-token'])) return jsonRes(res, 200, Object.assign({ ok: true, up: false, blocked: true }, userView(u)));
     if (n > 0) {
       const now = Date.now(); let w = KWIN.get(u.name); if (!w || now - w.t > 3600000) w = { t: now, n: 0 };
       n = Math.max(0, Math.min(n, 500 - w.n)); w.n += n; KWIN.set(u.name, w);
@@ -486,13 +493,17 @@ function onMsg(c, txt) {
     for (const id of Object.keys(m.d).slice(0, 10)) {
       const o = room.members.get(+id), u = o && ACC.users[o.acct]; let n = Math.floor(+m.d[id]);
       if (!u || !(n > 0)) continue; n = Math.min(n, 40); if (room.kw.n + n > 150) break; room.kw.n += n;     // защита от накрутки: не больше 150 убийств за 30 секунд на комнату
+      if (o.admin || cheated(u)) {                                                   // ранг только без админских способностей
+        if (!o.bl || now - o.bl > 30000) { o.bl = now; send(o, { s: 'rank', kills: u.kills, rank: rankOf(u.kills), up: false, blocked: true }); }
+        continue;
+      }
       const up = addKills(u, n); o.rank = rankOf(u.kills);
       send(o, { s: 'rank', kills: u.kills, rank: o.rank, up });
       if (up) { bcRoster(room); for (const x of room.members.values()) send(x, { s: 'rankup', name: o.name, rank: o.rank }); }
     }
     return;
   }
-  if (m.s === 'say' && (c.admin || ((ACC.users[c.acct] || {}).perms || []).includes('say'))) { const text = String(m.text || '').trim().slice(0, 200); if (text) { const out = JSON.stringify({ s: 'say', name: plainName(c.name), text }); for (const o of room.members.values()) send(o, out); } return; }
+  if (m.s === 'say' && c.admin) { const text = String(m.text || '').trim().slice(0, 200); if (text) { const out = JSON.stringify({ s: 'say', name: plainName(c.name), text }); for (const o of room.members.values()) send(o, out); } return; }
   if (m.s === 'm' && m.m && typeof m.m === 'object') {
     if (c.id === room.hostId) {                            // по сообщениям хоста знаем, идёт ли игра
       const t = m.m.t;
@@ -526,7 +537,7 @@ const handle = (req, res) => {
   if (u === '/auth/register' && req.method === 'POST') return authRegister(req, res);
   if (u === '/auth/login' && req.method === 'POST') return authLogin(req, res);
   if (u === '/auth/kills' && req.method === 'POST') return authKills(req, res);
-  if (u === '/auth/me') { const a = verifyToken(req.headers['x-auth']); return a && !a.banned ? jsonRes(res, 200, Object.assign({ ok: true, name: a.name }, userView(a))) : jsonRes(res, 401, { ok: false }); }
+  if (u === '/auth/me') { const a = verifyToken(req.headers['x-auth']); if (!a) return jsonRes(res, 401, { ok: false }); if (a.banned) return jsonRes(res, 403, { ok: false, err: 'banned' }); return jsonRes(res, 200, Object.assign({ ok: true, name: a.name }, userView(a))); }
   if (u === '/admin' && req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff' }); return res.end(ADMIN_HTML); }
   if (u === '/admin/login' && req.method === 'POST') return adminLoginRoute(req, res);
   if (u === '/admin/api' && req.method === 'POST') return adminApi(req, res);
