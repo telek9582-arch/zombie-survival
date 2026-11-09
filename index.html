@@ -440,7 +440,7 @@ let bt;function showB(t,ms=2200,c='#ffd23f'){chatAdd('Система',t,c);const
 function ov(html){const o=$('ov');o.innerHTML=html;o.style.display=html?'flex':'none'}
 function greet(){ov('<h1 style="font-size:clamp(28px,6vmin,44px);color:#ffd23f">ZOMBIE SURVIVAL</h1>'
   +'<div style="max-width:880px;margin:14px 20px 0;padding:12px 20px;border:2px solid #9fd8ff;border-radius:10px;background:rgba(20,40,70,.6);font-size:clamp(16px,3vmin,28px);line-height:1.5">'
-   +'<div style="font-size:.82em;line-height:1.5;padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid rgba(159,216,255,.4)">Создатель: <b>Яндаров Абдул-Рахман</b><br><span style="color:#9fd8ff">Обновил игру: <b>октябрь 2026</b></span></div>'
+   +'<div style="font-size:.82em;line-height:1.5;padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid rgba(159,216,255,.4)">Создатель: <b>Яндаров Абдул-Рахман</b><br><span style="color:#9fd8ff">Создал игру: <b> Сентябрь 2026</b></span></div>'
    +'<div id="ann"><b>Уважаемые игроки!</b><br>Игра обновлена <b>27.10.2026</b>.<br>Добавлены комнаты — теперь можно играть онлайн с друзьями.</div></div>'
   +'<div style="font-size:clamp(18px,3.6vmin,30px);font-weight:bold;color:#ff8a3d;margin:20px 20px 0;max-width:900px">СПАСИБО, ЧТО ВОШЛИ В МОЮ ИГРУ!<br>Я ОЧЕНЬ РАД!<br>ЖЕЛАЮ ВАМ УДАЧИ И СЧАСТЛИВОЙ ИГРЫ!</div><button onclick="greetNext()">ДАЛЕЕ</button>');
   clearTimeout(window.__gt);window.__gt=setTimeout(()=>{if(state=='menu'&&$('ann'))greetNext()},30000);
