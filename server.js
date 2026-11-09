@@ -135,7 +135,7 @@ function adminLoginRoute(req, res) {
 }
 function closeRoom(r, code) {
   const rest = [...r.members.values()]; r.members.clear(); r.hostId = null; r.busy = false; r.mode = 'coop'; r.dead.clear();
-  for (const o of rest) { if (o.name != null) send(o, { s: code }); o.room = null; o.name = null; }
+  for (const o of rest) { if (o.name != null) { send(o, { s: code }); acctLeave(o); } o.room = null; o.name = null; }
   setTimeout(() => rest.forEach(o => { try { o.sock.end(); } catch (e) { } }), 300);
 }
 function adminApi(req, res) {
@@ -165,9 +165,17 @@ function adminApi(req, res) {
       case 'setkills': {
         const k = String(j.name || '').toLowerCase(), u = ACC.users[k]; if (!u) return jsonRes(res, 404, { ok: false, err: 'Нет такого аккаунта' });
         u.kills = Math.max(0, Math.min(1000000, Math.floor(+j.kills) || 0)); saveAcc(); pushRank(k, false); return jsonRes(res, 200, { ok: true, kills: u.kills, rank: rankOf(u.kills) }); }
-      case 'accounts': return jsonRes(res, 200, { ok: true, total: Object.keys(ACC.users).length,
-        list: Object.values(ACC.users).sort((a, b) => b.created - a.created).slice(0, 500).map(u => ({ name: u.name, created: u.created, last: u.last || 0, banned: !!u.banned, kills: u.kills || 0, rank: rankOf(u.kills || 0), perms: u.perms || [],
-          online: [...CL.values()].some(c => c.acct === u.name.toLowerCase() && c.name != null) })) });
+      case 'accounts': { const L = accList(); return jsonRes(res, 200, { ok: true, total: Object.keys(ACC.users).length, onlineCount: L.filter(u => u.online).length, list: L }); }
+      case 'export': return jsonRes(res, 200, { ok: true, csv: csvList() });
+      case 'resetpass': {
+        const k = String(j.name || '').toLowerCase(), u = ACC.users[k]; if (!u) return jsonRes(res, 404, { ok: false, err: 'Нет такого аккаунта' });
+        const np = String(j.pass || '') || randPass(); if (np.length < 6 || np.length > 64) return jsonRes(res, 400, { ok: false, err: 'Пароль: от 6 символов' });
+        u.salt = crypto.randomBytes(16).toString('hex'); u.hash = hashPass(np, u.salt); u.pv = (u.pv || 0) + 1;       // все старые входы перестают действовать
+        saveAcc(); kickAccount(k); console.log('[ADMIN] пароль сброшен: ' + u.name); return jsonRes(res, 200, { ok: true, pass: np }); }
+      case 'setrank': {
+        const k = String(j.name || '').toLowerCase(), u = ACC.users[k], r = Math.floor(+j.rank); if (!u) return jsonRes(res, 404, { ok: false, err: 'Нет такого аккаунта' });
+        if (!(r >= 1 && r <= 10)) return jsonRes(res, 400, { ok: false, err: 'Ранг: от 1 до 10' });
+        u.kills = RANK_NEED[r - 1]; saveAcc(); pushRank(k, false); console.log('[ADMIN] ранг ' + r + ' -> ' + u.name); return jsonRes(res, 200, { ok: true, kills: u.kills, rank: r }); }
       case 'ban': case 'unban': case 'delacc': {
         const k = String(j.name || '').toLowerCase(), u = ACC.users[k]; if (!u) return jsonRes(res, 404, { ok: false, err: 'Нет такого аккаунта' });
         if (j.act === 'delacc') delete ACC.users[k]; else u.banned = j.act === 'ban';
@@ -184,7 +192,7 @@ const ADMIN_HTML = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><
 <div id="pn" style="display:none"><h1>👑 Админ-панель <small id="who"></small> <button class="s r" id="out">Выйти</button></h1>
 <div class="box"><h2>Сообщение игрокам</h2><input id="mt" maxlength="200" placeholder="Текст сообщения" style="width:min(520px,100%)"> <select id="mr"><option value="all">Всем</option></select> <button id="ms">Отправить</button></div>
 <div class="box"><h2>Текст на первой странице игры</h2><small>Блок «Уважаемые игроки…». Пусто — стандартный текст. Каждая строка — с новой строки.</small><br><textarea id="an" rows="4" maxlength="600" style="width:min(620px,100%)"></textarea><br><button id="sv">Сохранить</button> <span id="ok" style="color:#7fff9f"></span></div>
-<div class="box"><h2>Игроки (аккаунты) <small id="ac"></small></h2><input id="af" placeholder="Поиск по имени" style="width:min(320px,100%)"><div style="max-height:320px;overflow:auto;margin-top:8px"><table><thead><tr><th>Имя</th><th>Ранг (убито)</th><th>Способности игрока</th><th>Был в игре</th><th>Статус</th><th></th></tr></thead><tbody id="arows"></tbody></table></div></div>
+<div class="box"><h2>Игроки (аккаунты) <small id="ac"></small></h2><input id="af" placeholder="Поиск по имени" style="width:min(320px,100%)"> <button id="ax">⬇ Скачать список (CSV)</button> <b id="onl" style="color:#7fff9f;margin-left:10px"></b><br><small>Пароли в системе хранятся только в виде необратимого хеша — их увидеть нельзя. Если игрок забыл пароль, нажмите «сбросить пароль»: появится новый, его можно передать игроку.</small><div style="max-height:320px;overflow:auto;margin-top:8px"><table><thead><tr><th>Ник и статус</th><th>Ранг (убито)</th><th>Способности игрока</th><th>Последний раз в игре</th><th>Играл всего</th><th>Создан</th><th>Аккаунт</th><th></th></tr></thead><tbody id="arows"></tbody></table></div></div>
 <div class="box"><h2>Комнаты <small id="on"></small></h2><table><thead><tr><th>Комната</th><th>Статус</th><th>Игроки</th><th></th></tr></thead><tbody id="rows"></tbody></table></div></div>
 <script>
 var T=sessionStorage.getItem('zs_admin_panel')||'';
@@ -206,20 +214,25 @@ function load(first){api('state',{},function(j){if(!j.ok)return;document.getElem
 var CMDS=['god','run','jump','power','rapid','heal'];
 var AN={god:'Бессмертие',run:'Быстрый бег',jump:'Высокий прыжок',power:'Усиленный урон ×5',rapid:'Бесконечные патроны',heal:'Быстрое лечение'};
 var RN=['Солдат','Ефрейтор','Сержант','Старшина','Лейтенант','Капитан','Майор','Полковник','Генерал','Маршал'];
-function loadAcc(){api('accounts',{},function(j){if(!j.ok)return;var f=(document.getElementById('af').value||'').toLowerCase();document.getElementById('ac').textContent='— всего: '+j.total;var tb=document.getElementById('arows');tb.innerHTML='';
+function fd(s){s=Math.floor(s||0);var h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?h+' ч '+m+' мин':(m?m+' мин':(s?'меньше минуты':'—'))}
+function loadAcc(){api('accounts',{},function(j){if(!j.ok)return;var f=(document.getElementById('af').value||'').toLowerCase();document.getElementById('ac').textContent='— всего: '+j.total;document.getElementById('onl').textContent='онлайн сейчас: '+j.onlineCount;var tb=document.getElementById('arows');tb.innerHTML='';
  j.list.filter(function(u){return !f||u.name.toLowerCase().indexOf(f)>=0}).forEach(function(u){var tr=el('tr');
-  tr.appendChild(el('td',null,(u.online?'🟢 ':'')+u.name));
+  var t1=el('td');t1.appendChild(el('b',null,u.name));var st=el('span',null,u.online?'  🟢 онлайн':'  ⚫ офлайн');st.style.color=u.online?'#7fff9f':'#9aa';t1.appendChild(st);if(u.room)t1.appendChild(el('small',null,' · '+u.room));tr.appendChild(t1);
   var tk=el('td',null,RN[u.rank-1]+' ('+u.kills+') ');var kb=el('button','s','изм.');kb.onclick=function(){var v=prompt('Сколько убитых зомби записать игроку '+u.name+'?',u.kills);if(v!==null)api('setkills',{name:u.name,kills:+v},function(){loadAcc()})};tk.appendChild(kb);tr.appendChild(tk);
-  var tp=el('td');(u.perms||[]).forEach(function(c){var b=el('span','pl',(AN[c]||c)+' ');var x=el('button','s r','✕');x.title='отобрать команду';x.onclick=function(){api('revoke',{name:u.name,cmd:c},function(){loadAcc()})};b.appendChild(x);tp.appendChild(b)});
+  var tp=el('td');(u.perms||[]).forEach(function(c){var b=el('span','pl',(AN[c]||c)+' ');var x=el('button','s r','✕');x.title='отобрать способность';x.onclick=function(){api('revoke',{name:u.name,cmd:c},function(){loadAcc()})};b.appendChild(x);tp.appendChild(b)});
   var sel=el('select');CMDS.forEach(function(c){if((u.perms||[]).indexOf(c)<0){var o=el('option',null,AN[c]);o.value=c;sel.appendChild(o)}});
   if(sel.options.length){var gb=el('button','s','выдать');gb.style.marginLeft='4px';gb.onclick=function(){api('grant',{name:u.name,cmd:sel.value},function(){loadAcc()})};tp.appendChild(sel);tp.appendChild(gb)}tr.appendChild(tp);
-  tr.appendChild(el('td',null,u.last?new Date(u.last).toLocaleString('ru-RU'):'—'));
+  tr.appendChild(el('td',null,u.online?'сейчас в игре':(u.last?new Date(u.last).toLocaleString('ru-RU'):'—')));
+  tr.appendChild(el('td',null,fd(u.play)));
+  tr.appendChild(el('td',null,new Date(u.created).toLocaleDateString('ru-RU')));
   tr.appendChild(el('td',null,u.banned?'🚫 заблокирован':'активен'));
   var tc=el('td'),b=el('button','s '+(u.banned?'':'r'),u.banned?'разблокировать':'заблокировать');b.onclick=function(){api(u.banned?'unban':'ban',{name:u.name},function(){loadAcc()})};tc.appendChild(b);
+  var rb=el('button','s','сбросить пароль');rb.style.marginLeft='6px';rb.onclick=function(){var v=prompt('Новый пароль для '+u.name+' (от 6 символов). Оставьте пустым — будет создан случайный:','');if(v===null)return;api('resetpass',{name:u.name,pass:v},function(r){if(r.ok)alert('Новый пароль игрока '+u.name+': '+r.pass+String.fromCharCode(10,10)+'Передайте его игроку. Старый пароль и все прежние входы больше не действуют.');else alert(r.err||'Ошибка')})};tc.appendChild(rb);
   var d=el('button','s r','удалить');d.style.marginLeft='6px';d.onclick=function(){if(confirm('Удалить аккаунт '+u.name+'?'))api('delacc',{name:u.name},function(){loadAcc()})};tc.appendChild(d);tr.appendChild(tc);tb.appendChild(tr)})})}
+document.getElementById('ax').onclick=function(){api('export',{},function(j){if(!j.ok)return;var b=new Blob(['\ufeff'+j.csv],{type:'text/csv;charset=utf-8'});var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='igroki-'+new Date().toISOString().slice(0,10)+'.csv';document.body.appendChild(a);a.click();a.remove()})};
 document.getElementById('af').oninput=function(){loadAcc()};
 if(T){show(true);load(true);loadAcc()}
-var tick=0;setInterval(function(){if(T){load();var a=document.activeElement;if(++tick%5==0&&!(a&&(a.tagName=='SELECT'||a.tagName=='INPUT')))loadAcc()}},3000);
+var tick=0;setInterval(function(){if(T){load();var a=document.activeElement;if(++tick%2==0&&!(a&&(a.tagName=='SELECT'||a.tagName=='INPUT')))loadAcc()}},3000);
 </script></body></html>`;
 
 
@@ -240,8 +253,8 @@ for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { try { saveAcc()
 const NAME_RE = /^[A-Za-zА-Яа-яЁё0-9_.-]{3,16}$/;
 const RESERVED = new Set(['гость', 'guest', 'admin', 'админ', 'администратор', 'система', 'system', 'zs-admin']);
 const b64u = b => Buffer.from(b).toString('base64url');
-function mkToken(name) {
-  const p = b64u(name + '|' + (Date.now() + 30 * 864e5));
+function mkToken(name, pv) {
+  const p = b64u(name + '|' + (Date.now() + 30 * 864e5) + '|' + (pv || 0));
   return p + '.' + crypto.createHmac('sha256', ACC.secret).update(p).digest('hex').slice(0, 40);
 }
 function verifyToken(tok) {                       // -> аккаунт или null (подпись, срок, аккаунт существует)
@@ -251,7 +264,9 @@ function verifyToken(tok) {                       // -> аккаунт или nu
   if (sig.length !== good.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(good))) return null;
   let t; try { t = Buffer.from(p, 'base64url').toString('utf8').split('|'); } catch (e) { return null; }
   if (!(+t[1] > Date.now())) return null;
-  return ACC.users[String(t[0]).toLowerCase()] || null;
+  const u = ACC.users[String(t[0]).toLowerCase()];
+  if (!u || (+t[2] || 0) !== (u.pv || 0)) return null;
+  return u;
 }
 // Лимиты рассчитаны на общий адрес (школа, семья, мобильный оператор): много игроков могут делить один IP.
 const REG_LIMIT = +process.env.REG_LIMIT || 60;             // регистраций с одного адреса в час
@@ -275,7 +290,7 @@ function authKills(req, res) {
   if (u.banned) return jsonRes(res, 403, { ok: false, err: 'banned' });
   readJson(req, res, j => {
     let n = Math.min(80, Math.floor(+j.n) || 0), up = false;
-    if (cheated(u) || sessOk(req.headers['x-admin-token'])) return jsonRes(res, 200, Object.assign({ ok: true, up: false, blocked: true }, userView(u)));
+    if (cheated(u)) return jsonRes(res, 200, Object.assign({ ok: true, up: false, blocked: true }, userView(u)));
     if (n > 0) {
       const now = Date.now(); let w = KWIN.get(u.name); if (!w || now - w.t > 3600000) w = { t: now, n: 0 };
       n = Math.max(0, Math.min(n, 500 - w.n)); w.n += n; KWIN.set(u.name, w);
@@ -293,6 +308,40 @@ function pushRank(key, up) {
 }
 function pushPerms(key) { const u = ACC.users[key]; if (!u) return; for (const c of CL.values()) if (c.acct === key) send(c, { s: 'perms', list: u.perms || [] }); }
 
+
+/* ---------- список игроков для админа: онлайн/офлайн, последний вход, время в игре ---------- */
+const RANK_NAMES = ['Солдат', 'Ефрейтор', 'Сержант', 'Старшина', 'Лейтенант', 'Капитан', 'Майор', 'Полковник', 'Генерал', 'Маршал'];
+function acctLeave(c) {                               // игрок вышел из комнаты: записать, сколько он играл
+  const u = ACC.users[c.acct]; if (!u || !c.joinedAt) return;
+  const now = Date.now(); u.play = (u.play || 0) + Math.min((now - c.joinedAt) / 1000, 12 * 3600); u.last = now; c.joinedAt = 0; saveAccSoon();
+}
+function liveSec(u) { const k = u.name.toLowerCase(); let a = 0; for (const c of CL.values()) if (c.acct === k && c.name != null && c.joinedAt) a += (Date.now() - c.joinedAt) / 1000; return a; }
+function isOnline(u) { const k = u.name.toLowerCase(); return [...CL.values()].some(c => c.acct === k && c.name != null) || (Date.now() - (u.seen || 0) < 100000); }
+function accList() {
+  const now = Date.now();
+  return Object.values(ACC.users).sort((a, b) => b.created - a.created).slice(0, 1000).map(u => {
+    const on = isOnline(u), k = u.name.toLowerCase(), cl = [...CL.values()].find(c => c.acct === k && c.name != null && c.room);
+    return { name: u.name, created: u.created, last: on ? now : (u.last || 0), online: on, room: cl ? roomName(cl.room) : '', play: Math.floor((u.play || 0) + liveSec(u)),
+      banned: !!u.banned, kills: u.kills || 0, rank: rankOf(u.kills || 0), perms: u.perms || [] };
+  });
+}
+function csvList() {
+  const q = v => '"' + String(v).replace(/"/g, '""') + '"', d = ms => ms ? new Date(ms).toLocaleString('ru-RU') : '';
+  const rows = [['Ник', 'Статус', 'Ранг', 'Убито зомби', 'Способности', 'Аккаунт создан (время сервера)', 'Последний раз в игре (время сервера)', 'Играл, минут', 'Аккаунт']];
+  for (const u of accList()) rows.push([u.name, u.online ? 'онлайн' : 'офлайн', RANK_NAMES[u.rank - 1], u.kills, u.perms.join(' '), d(u.created), u.online ? 'сейчас' : d(u.last), Math.floor(u.play / 60), u.banned ? 'заблокирован' : 'активен']);
+  return rows.map(r => r.map(q).join(';')).join('\r\n');
+}
+function randPass() { const al = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let p = ''; for (let i = 0; i < 8; i++) p += al[crypto.randomInt(al.length)]; return p; }
+function authPing(req, res) {                          // «страница игры открыта» + время одиночной игры; раз в ~45 с
+  readJson(req, res, j => {
+    const u = verifyToken(req.headers['x-auth'] || j.t); if (!u) return jsonRes(res, 401, { ok: false }); if (u.banned) return jsonRes(res, 403, { ok: false });
+    const now = Date.now(), k = u.name.toLowerCase(), inWs = [...CL.values()].some(c => c.acct === k && c.name != null);
+    let p = Math.max(0, Math.min(90, Math.floor(+j.p) || 0)); const gap = u.lp ? Math.max(0, (now - u.lp) / 1000) : 90; p = Math.min(p, Math.floor(gap) + 5);   // нельзя играть дольше, чем прошло времени
+    if (!inWs && p > 0) u.play = (u.play || 0) + p;                                                                                                          // сетевую игру считает сервер сам
+    u.lp = now; u.last = now; u.seen = j.bye ? 0 : now; saveAccSoon();
+    jsonRes(res, 200, { ok: true });
+  });
+}
 const REGS = new Map(), LFAILS = new Map(), NFAILS = new Map();
 function kickAccount(key) { for (const c of [...CL.values()]) if (c.acct === key) { send(c, { s: 'kicked' }); setTimeout(() => drop(c), 250); } }
 function authRegister(req, res) {
@@ -306,10 +355,10 @@ function authRegister(req, res) {
     if (RESERVED.has(key) || (ADMIN && key === String(ADMIN.login).toLowerCase())) return jsonRes(res, 400, { ok: false, err: 'Это имя зарезервировано' });
     if (ACC.users[key]) return jsonRes(res, 409, { ok: false, err: 'Такое имя уже занято' });
     const salt = crypto.randomBytes(16).toString('hex');
-    ACC.users[key] = { name, salt, hash: hashPass(pass, salt), created: now, last: now, banned: false, kills: 0, perms: [] };
+    ACC.users[key] = { name, salt, hash: hashPass(pass, salt), created: now, last: now, seen: now, play: 0, pv: 0, banned: false, kills: 0, perms: [] };
     saveAcc(); list.push(now); REGS.set(ip, list);
     console.log('[+] аккаунт: ' + name + '  (всего: ' + Object.keys(ACC.users).length + ')');
-    jsonRes(res, 200, Object.assign({ ok: true, name, token: mkToken(name) }, userView(ACC.users[key])));
+    jsonRes(res, 200, Object.assign({ ok: true, name, token: mkToken(name, 0) }, userView(ACC.users[key])));
   });
 }
 const DUMMY_SALT = crypto.randomBytes(16).toString('hex');
@@ -328,8 +377,8 @@ function authLogin(req, res) {
       return setTimeout(() => jsonRes(res, 401, { ok: false, err: u ? 'Неверный пароль' : 'Такого аккаунта нет — нажмите «Регистрация»' }), 400);
     }
     if (u.banned) return jsonRes(res, 403, { ok: false, err: 'Аккаунт заблокирован администратором' });
-    LFAILS.delete(key); u.last = Date.now(); saveAcc();
-    jsonRes(res, 200, Object.assign({ ok: true, name: u.name, token: mkToken(u.name) }, userView(u)));
+    LFAILS.delete(key); u.last = u.seen = Date.now(); saveAcc();
+    jsonRes(res, 200, Object.assign({ ok: true, name: u.name, token: mkToken(u.name, u.pv || 0) }, userView(u)));
   });
 }
 
@@ -442,6 +491,7 @@ function drop(c) {
   if (!CL.has(c.id)) return;
   CL.delete(c.id);
   try { c.sock.destroy(); } catch (e) { }
+  if (c.name != null && c.acct) acctLeave(c);
   const room = c.room;
   if (!room || c.name == null) return;
   room.members.delete(c.id);
@@ -450,7 +500,7 @@ function drop(c) {
     room.hostId = null; room.busy = false; room.mode = 'coop'; room.dead.clear();
     const rest = [...room.members.values()];
     room.members.clear();
-    for (const o of rest) { if (o.name != null) send(o, { s: 'hostgone' }); o.room = null; o.name = null; }
+    for (const o of rest) { if (o.name != null) { send(o, { s: 'hostgone' }); acctLeave(o); } o.room = null; o.name = null; }
     setTimeout(() => rest.forEach(o => { try { o.sock.end(); } catch (e) { } }), 300);
     console.log('[!] хост вышел, комната «' + roomName(room) + '» закрыта. Можно создать новую.');
   } else bcRoster(room);
@@ -475,7 +525,7 @@ function onMsg(c, txt) {
     if (m.s === 'join' && room.hostId == null) return send(c, { s: 'err', code: 'nohost' });
     if (joined(room) >= MAXP) return send(c, { s: 'err', code: 'full' });
     c.room = room; room.members.set(c.id, c);
-    c.acct = key; c.name = acc.name; c.rank = rankOf(acc.kills || 0);
+    c.acct = key; c.name = acc.name; c.rank = rankOf(acc.kills || 0); c.joinedAt = Date.now(); acc.last = acc.seen = c.joinedAt; saveAccSoon();
     const adm = m.token ? sessOk(m.token) : null;
     if (m.token && !adm) send(c, { s: 'adminfail' });
     if (adm) { c.admin = true; c.name = '👑 ' + c.name; adminSeen = Date.now(); }
@@ -493,7 +543,7 @@ function onMsg(c, txt) {
     for (const id of Object.keys(m.d).slice(0, 10)) {
       const o = room.members.get(+id), u = o && ACC.users[o.acct]; let n = Math.floor(+m.d[id]);
       if (!u || !(n > 0)) continue; n = Math.min(n, 40); if (room.kw.n + n > 150) break; room.kw.n += n;     // защита от накрутки: не больше 150 убийств за 30 секунд на комнату
-      if (o.admin || cheated(u)) {                                                   // ранг только без админских способностей
+      if (cheated(u)) {                                                              // игроки: ранг только без админских способностей (у админа ранг не блокируется)
         if (!o.bl || now - o.bl > 30000) { o.bl = now; send(o, { s: 'rank', kills: u.kills, rank: rankOf(u.kills), up: false, blocked: true }); }
         continue;
       }
@@ -537,6 +587,7 @@ const handle = (req, res) => {
   if (u === '/auth/register' && req.method === 'POST') return authRegister(req, res);
   if (u === '/auth/login' && req.method === 'POST') return authLogin(req, res);
   if (u === '/auth/kills' && req.method === 'POST') return authKills(req, res);
+  if (u === '/auth/ping' && req.method === 'POST') return authPing(req, res);
   if (u === '/auth/me') { const a = verifyToken(req.headers['x-auth']); if (!a) return jsonRes(res, 401, { ok: false }); if (a.banned) return jsonRes(res, 403, { ok: false, err: 'banned' }); return jsonRes(res, 200, Object.assign({ ok: true, name: a.name }, userView(a))); }
   if (u === '/admin' && req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff' }); return res.end(ADMIN_HTML); }
   if (u === '/admin/login' && req.method === 'POST') return adminLoginRoute(req, res);
